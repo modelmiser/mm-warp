@@ -28,24 +28,47 @@
 
 ## Next Priorities
 
-### 1. Real Wayland Screen Capture (HIGH PRIORITY)
+### 1. Real Wayland Screen Capture ✅ **COMPLETE**
 
-**Current**: Stub returns empty buffer
-**Need**: Implement `wlr-screencopy-unstable-v1` protocol
+**Status**: wlr-screencopy-unstable-v1 **fully implemented!**
 
-**Tasks**:
-- [ ] Bind to `zwlr_screencopy_manager_v1`
-- [ ] Create shared memory pool (`wl_shm`)
-- [ ] Request screencopy to shm buffer
-- [ ] Handle frame ready events
-- [ ] Copy buffer data for encoding
+**What Works**:
+- ✅ Binds to `zwlr_screencopy_manager_v1`
+- ✅ Creates shared memory pool (`wl_shm` + memfd)
+- ✅ Requests screencopy to shm buffer
+- ✅ Handles frame ready events (async)
+- ✅ Copies buffer data (ARGB→RGBA conversion)
 
-**Complexity**: Medium (async event handling, protocol interaction)
-**Timeline**: 1-2 days
+**Compositor Support**:
+- ✅ **Sway**: Works
+- ✅ **Hyprland**: Works
+- ✅ **wlroots-based**: Works
+- ❌ **COSMIC**: Needs ext-image-copy-capture-v1 (see below)
+- ❌ **GNOME/KDE**: Needs portal or different protocol (see below)
 
-**References**:
-- `old/WAYLAND-STRATEGY-PRAGMATIC.md` - Wayland support strategy
-- `wayland_protocols_wlr::screencopy::v1` - Already imported
+**Test**: `cargo run --bin test_screencopy` (requires wlroots compositor)
+
+---
+
+### 1a. COSMIC Compositor Support (NEW - FUTURE WORK)
+
+**Current**: COSMIC uses ext-image-copy-capture-v1, not wlr-screencopy
+**Impact**: mm-warp doesn't work on COSMIC desktop
+
+**Option A - Direct Protocol** (2-3 hours):
+- [ ] Download ext-image-copy-capture-v1.xml from wayland-protocols
+- [ ] Generate Rust bindings using wayland-scanner
+- [ ] Implement capture (similar pattern to wlr-screencopy)
+- [ ] Add protocol detection + fallback logic
+- [ ] Test on COSMIC
+
+**Option B - Universal Portal** (4-6 hours):
+- [ ] Complete PipeWire integration (complex POD API)
+- [ ] Use XDG Desktop Portal for screen capture
+- [ ] Works on ALL compositors (COSMIC, GNOME, KDE, Sway)
+- [ ] Trade-off: User permission prompts, higher latency
+
+**Recommendation**: Start with Option A (COSMIC-specific), add Option B later if needed.
 
 ---
 

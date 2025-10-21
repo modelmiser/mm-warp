@@ -11,12 +11,12 @@ anyhow = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 
-# Wayland dependencies
+# Wayland screen capture (staging feature for ext-image-copy-capture-v1)
 wayland-client = "0.31"
-wayland-protocols = { version = "0.32", features = ["client"] }
+wayland-protocols = { version = "0.32", features = ["client", "staging"] }
 wayland-protocols-wlr = { version = "0.3", features = ["client"] }
 
-# Screen capture
+# Shared memory for screen capture
 memmap2 = "0.9"
 nix = { version = "0.29", features = ["fs", "mman"] }
 
@@ -25,3 +25,4 @@ rcgen = "0.13"
 
 # Video encoding
 ffmpeg-next = { workspace = true }
+

@@ -1,19 +1,22 @@
 use anyhow::{Context, Result};
-use wayland_client::{Connection, Dispatch, QueueHandle, EventQueue};
+use std::net::SocketAddr;
+use std::os::fd::{AsFd, AsRawFd, OwnedFd};
+use quinn::{Endpoint, ServerConfig};
+use rustls::pki_types::{CertificateDer, PrivateKeyDer};
+use ffmpeg_next::software::scaling::{context::Context as ScaleContext, flag::Flags};
+use wayland_client::{Connection, Dispatch, QueueHandle};
 use wayland_client::globals::{registry_queue_init, GlobalListContents};
 use wayland_client::protocol::{wl_registry, wl_output, wl_shm, wl_buffer, wl_shm_pool};
 use wayland_protocols_wlr::screencopy::v1::client::{
     zwlr_screencopy_manager_v1::ZwlrScreencopyManagerV1,
     zwlr_screencopy_frame_v1::{ZwlrScreencopyFrameV1, Event as FrameEvent},
 };
-use std::net::SocketAddr;
-use std::os::fd::{AsFd, AsRawFd, OwnedFd};
-use quinn::{Endpoint, ServerConfig};
-use rustls::pki_types::{CertificateDer, PrivateKeyDer};
-use ffmpeg_next::software::scaling::{context::Context as ScaleContext, flag::Flags};
 use memmap2::MmapMut;
 use nix::sys::memfd;
 use nix::unistd::ftruncate;
+
+// ext-image-copy-capture-v1 support (COSMIC, newer compositors)
+pub mod ext_capture;
 
 /// Represents a detected display output
 #[derive(Debug, Clone)]

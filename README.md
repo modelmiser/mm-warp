@@ -18,7 +18,12 @@
 - ✅ Input event serialization
 - ✅ End-to-end integration (complete!)
 
-**Only remaining**: Real Wayland screencopy (currently stub)
+**Compositor Support**:
+- ✅ Sway (wlr-screencopy)
+- ✅ Hyprland (wlr-screencopy)
+- ✅ wlroots-based compositors (wlr-screencopy)
+- ❌ COSMIC (needs ext-image-copy-capture-v1 - future work)
+- ❌ GNOME/KDE (needs different protocol/portal - future work)
 
 **Progress**: See [FUTURE-PROTOCOLS.md](old/FUTURE-PROTOCOLS.md) for vision (moved to old/)
 
