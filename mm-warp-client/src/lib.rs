@@ -19,8 +19,10 @@ impl QuicClient {
 
     /// Connect to server
     pub async fn connect(&self, server_addr: SocketAddr) -> Result<Connection> {
+        // Install default crypto provider (ring)
+        let _ = rustls::crypto::ring::default_provider().install_default();
+
         // Skip cert verification for self-signed certs (dev only!)
-        let mut root_store = rustls::RootCertStore::empty();
         let crypto = rustls::ClientConfig::builder()
             .dangerous()
             .with_custom_certificate_verifier(Arc::new(SkipVerification))
@@ -89,6 +91,11 @@ impl H264Decoder {
 
     /// Decode H.264 packet to RGBA frame
     pub fn decode(&mut self, encoded_packet: &[u8]) -> Result<Vec<u8>> {
+        if encoded_packet.is_empty() {
+            // Empty packet, return empty frame
+            return Ok(Vec::new());
+        }
+
         let packet = ffmpeg_next::Packet::copy(encoded_packet);
 
         self.decoder.send_packet(&packet)
@@ -100,11 +107,12 @@ impl H264Decoder {
             Ok(_) => {
                 // Successfully decoded frame
                 // Convert to RGBA (stub for now - needs swscale)
+                tracing::info!("Decoded frame: {}x{}", decoded.width(), decoded.height());
                 Ok(vec![0u8; (self.width * self.height * 4) as usize])
             }
             Err(_) => {
                 // Decoder buffering, return empty
-                Ok(vec![0u8; (self.width * self.height * 4) as usize])
+                Ok(Vec::new())
             }
         }
     }
