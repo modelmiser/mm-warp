@@ -15,9 +15,9 @@ async fn main() -> Result<()> {
     let connection = client.connect("127.0.0.1:4433".parse().unwrap()).await?;
     println!("✅ Connected\n");
 
-    // Create decoder
-    println!("Creating H.264 decoder...");
-    let mut decoder = H264Decoder::new(1920, 1080)?;
+    // Create decoder (4K for COSMIC)
+    println!("Creating H.264 decoder (3840x2160)...");
+    let mut decoder = H264Decoder::new(3840, 2160)?;
     println!("✅ Decoder ready\n");
 
     // Receive and decode frames (receive up to 10)
