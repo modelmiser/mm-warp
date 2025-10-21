@@ -1,11 +1,19 @@
 use anyhow::{Context, Result};
-use wayland_client::{Connection, Dispatch, QueueHandle};
+use wayland_client::{Connection, Dispatch, QueueHandle, EventQueue};
 use wayland_client::globals::{registry_queue_init, GlobalListContents};
-use wayland_client::protocol::wl_registry;
+use wayland_client::protocol::{wl_registry, wl_output, wl_shm, wl_buffer, wl_shm_pool};
+use wayland_protocols_wlr::screencopy::v1::client::{
+    zwlr_screencopy_manager_v1::ZwlrScreencopyManagerV1,
+    zwlr_screencopy_frame_v1::{ZwlrScreencopyFrameV1, Event as FrameEvent},
+};
 use std::net::SocketAddr;
+use std::os::fd::{AsFd, AsRawFd, OwnedFd};
 use quinn::{Endpoint, ServerConfig};
 use rustls::pki_types::{CertificateDer, PrivateKeyDer};
 use ffmpeg_next::software::scaling::{context::Context as ScaleContext, flag::Flags};
+use memmap2::MmapMut;
+use nix::sys::memfd;
+use nix::unistd::ftruncate;
 
 /// Represents a detected display output
 #[derive(Debug, Clone)]
@@ -230,7 +238,26 @@ impl QuicServer {
     }
 }
 
-/// State for Wayland event handling
+/// State for Wayland event handling during screencopy
+struct CaptureState {
+    frame_ready: bool,
+    frame_failed: bool,
+    buffer_info: Option<(u32, u32, u32, u32)>, // format, width, height, stride
+    pixels: Vec<u8>,
+}
+
+impl CaptureState {
+    fn new() -> Self {
+        Self {
+            frame_ready: false,
+            frame_failed: false,
+            buffer_info: None,
+            pixels: Vec::new(),
+        }
+    }
+}
+
+/// Basic state for registry
 struct State;
 
 impl Dispatch<wl_registry::WlRegistry, GlobalListContents> for State {
@@ -242,14 +269,79 @@ impl Dispatch<wl_registry::WlRegistry, GlobalListContents> for State {
         _conn: &Connection,
         _qhandle: &QueueHandle<Self>,
     ) {
-        // Minimal handler - just need this to compile
+        // Minimal handler
     }
+}
+
+// Screencopy frame event handler
+impl Dispatch<ZwlrScreencopyFrameV1, ()> for CaptureState {
+    fn event(
+        state: &mut Self,
+        _frame: &ZwlrScreencopyFrameV1,
+        event: <ZwlrScreencopyFrameV1 as wayland_client::Proxy>::Event,
+        _data: &(),
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+    ) {
+        match event {
+            FrameEvent::Buffer { format, width, height, stride } => {
+                let format_u32: u32 = format.into();
+                tracing::debug!("Buffer: {}x{}, stride={}, format={}", width, height, stride, format_u32);
+                state.buffer_info = Some((format_u32, width, height, stride));
+            }
+            FrameEvent::BufferDone => {
+                tracing::debug!("Buffer done - ready to copy");
+            }
+            FrameEvent::Ready { .. } => {
+                tracing::debug!("Frame ready!");
+                state.frame_ready = true;
+            }
+            FrameEvent::Failed => {
+                tracing::error!("Screencopy failed");
+                state.frame_failed = true;
+            }
+            _ => {}
+        }
+    }
+}
+
+// Dispatch for other Wayland objects (minimal)
+impl Dispatch<wl_shm::WlShm, ()> for CaptureState {
+    fn event(_: &mut Self, _: &wl_shm::WlShm, _: wl_shm::Event, _: &(), _: &Connection, _: &QueueHandle<Self>) {}
+}
+
+impl Dispatch<wl_buffer::WlBuffer, ()> for CaptureState {
+    fn event(_: &mut Self, _: &wl_buffer::WlBuffer, _: wl_buffer::Event, _: &(), _: &Connection, _: &QueueHandle<Self>) {}
+}
+
+impl Dispatch<wl_shm_pool::WlShmPool, ()> for CaptureState {
+    fn event(_: &mut Self, _: &wl_shm_pool::WlShmPool, _: wl_shm_pool::Event, _: &(), _: &Connection, _: &QueueHandle<Self>) {}
+}
+
+impl Dispatch<wl_output::WlOutput, ()> for CaptureState {
+    fn event(_: &mut Self, _: &wl_output::WlOutput, _: wl_output::Event, _: &(), _: &Connection, _: &QueueHandle<Self>) {}
+}
+
+impl Dispatch<ZwlrScreencopyManagerV1, ()> for CaptureState {
+    fn event(
+        _: &mut Self,
+        _: &ZwlrScreencopyManagerV1,
+        _event: <ZwlrScreencopyManagerV1 as wayland_client::Proxy>::Event,
+        _: &(),
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {}
+}
+
+impl Dispatch<wl_registry::WlRegistry, GlobalListContents> for CaptureState {
+    fn event(_: &mut Self, _: &wl_registry::WlRegistry, _: wl_registry::Event, _: &GlobalListContents, _: &Connection, _: &QueueHandle<Self>) {}
 }
 
 /// WaylandConnection manages connection to Wayland compositor
 pub struct WaylandConnection {
     connection: Connection,
     displays: Vec<Display>,
+    outputs: Vec<wl_output::WlOutput>,
 }
 
 impl WaylandConnection {
@@ -261,6 +353,7 @@ impl WaylandConnection {
         Ok(Self {
             connection,
             displays: Vec::new(),
+            outputs: Vec::new(),
         })
     }
 
@@ -290,22 +383,114 @@ impl WaylandConnection {
         Ok(&self.displays)
     }
 
-    /// Capture a single frame from the first display
-    /// Returns raw RGBA buffer (very basic, no error handling yet)
+    /// Capture a single frame from the first display using wlr-screencopy
+    /// Returns raw RGBA buffer
     pub fn capture_frame(&mut self) -> Result<Vec<u8>> {
-        // For Task 3, we'll use a simple approach:
-        // 1. Create shared memory buffer
-        // 2. Request screencopy to that buffer
-        // 3. Return the buffer data
+        // Initialize registry with CaptureState
+        let (globals, mut event_queue) = registry_queue_init::<CaptureState>(&self.connection)
+            .context("Failed to initialize registry")?;
 
-        // This is a placeholder - full implementation requires:
-        // - wl_shm pool creation
-        // - zwlr_screencopy_manager_v1 binding
-        // - Event handling for frame ready
+        let qh = event_queue.handle();
 
-        // For now, return empty buffer as stub
-        tracing::warn!("capture_frame is stub - returns empty buffer");
-        Ok(vec![0u8; 1920 * 1080 * 4]) // Hardcoded HD RGBA
+        // Bind required globals
+        let shm: wl_shm::WlShm = globals.bind(&qh, 1..=1, ())
+            .context("wl_shm not available")?;
+
+        let screencopy_mgr: ZwlrScreencopyManagerV1 = globals.bind(&qh, 1..=3, ())
+            .context("zwlr_screencopy_manager_v1 not available - compositor doesn't support screencopy")?;
+
+        // Get first output
+        let output: wl_output::WlOutput = globals.bind(&qh, 1..=4, ())
+            .context("No wl_output available")?;
+
+        tracing::info!("Bound screencopy manager and output");
+
+        // Create shared memory buffer (hardcoded 1920x1080 RGBA for now)
+        let width = 1920;
+        let height = 1080;
+        let stride = width * 4; // RGBA
+        let size = (stride * height) as usize;
+
+        tracing::debug!("Creating shm buffer: {}x{}, size={}", width, height, size);
+
+        // Create memfd
+        let fd = memfd::memfd_create(
+            std::ffi::CStr::from_bytes_with_nul(b"wl_shm\0").unwrap(),
+            memfd::MemFdCreateFlag::MFD_CLOEXEC,
+        ).context("Failed to create memfd")?;
+
+        // Truncate to size
+        ftruncate(&fd, size as i64).context("Failed to truncate memfd")?;
+
+        // Create mmap
+        let mut mmap = unsafe {
+            MmapMut::map_mut(&fd).context("Failed to mmap")?
+        };
+
+        // Create wl_shm_pool and buffer
+        let pool = shm.create_pool(fd.as_fd(), size as i32, &qh, ());
+        let buffer = pool.create_buffer(
+            0,
+            width as i32,
+            height as i32,
+            stride as i32,
+            wl_shm::Format::Argb8888,
+            &qh,
+            (),
+        );
+
+        tracing::debug!("Created shm buffer");
+
+        // Request screencopy (0 = no cursor overlay)
+        let frame = screencopy_mgr.capture_output(0, &output, &qh, ());
+
+        tracing::debug!("Requested screencopy");
+
+        // Create state
+        let mut state = CaptureState::new();
+
+        // Event loop - wait for buffer info
+        while state.buffer_info.is_none() && !state.frame_failed {
+            event_queue.blocking_dispatch(&mut state)
+                .context("Failed to dispatch events")?;
+        }
+
+        if state.frame_failed {
+            anyhow::bail!("Screencopy failed");
+        }
+
+        // Copy frame to buffer
+        frame.copy(&buffer);
+        tracing::debug!("Issued copy request");
+
+        // Wait for frame ready
+        while !state.frame_ready && !state.frame_failed {
+            event_queue.blocking_dispatch(&mut state)
+                .context("Failed to dispatch events")?;
+        }
+
+        if state.frame_failed {
+            anyhow::bail!("Screencopy failed during capture");
+        }
+
+        tracing::info!("Frame captured successfully");
+
+        // Copy from mmap to output buffer (convert ARGB to RGBA)
+        let mut rgba_buffer = vec![0u8; size];
+        let argb_data = mmap.as_ref();
+
+        // Convert ARGB8888 → RGBA
+        for i in 0..(width * height) as usize {
+            let idx = i * 4;
+            // ARGB: [B, G, R, A] in memory (little-endian)
+            // RGBA: [R, G, B, A]
+            rgba_buffer[idx] = argb_data[idx + 2];     // R
+            rgba_buffer[idx + 1] = argb_data[idx + 1]; // G
+            rgba_buffer[idx + 2] = argb_data[idx];     // B
+            rgba_buffer[idx + 3] = argb_data[idx + 3]; // A
+        }
+
+        Ok(rgba_buffer)
     }
 }
 
