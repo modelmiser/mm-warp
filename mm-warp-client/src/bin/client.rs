@@ -20,17 +20,23 @@ async fn main() -> Result<()> {
     let mut decoder = H264Decoder::new(1920, 1080)?;
     println!("✅ Decoder ready\n");
 
-    // Receive and decode frames
+    // Receive and decode frames (receive up to 10)
     println!("Receiving frames...");
-    for i in 0..3 {
+    let mut frames_decoded = 0;
+    for i in 0..10 {
         let encoded = QuicClient::receive_frame(&connection).await?;
         println!("  Frame {}: Received {} bytes", i + 1, encoded.len());
 
         let decoded = decoder.decode(&encoded)?;
-        println!("  Frame {}: Decoded to {} bytes", i + 1, decoded.len());
+        if decoded.is_empty() {
+            println!("  Frame {}: Buffered/empty", i + 1);
+        } else {
+            println!("  Frame {}: Decoded to {} bytes", i + 1, decoded.len());
+            frames_decoded += 1;
+        }
     }
 
-    println!("\n✅ All frames received and decoded");
+    println!("\n✅ {} frames successfully decoded", frames_decoded);
     println!("Client complete!");
 
     Ok(())

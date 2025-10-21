@@ -20,9 +20,10 @@ async fn main() -> Result<()> {
     let connection = server.accept().await?;
     println!("✅ Client connected from {}\n", connection.remote_address());
 
-    // Encode and send frames
-    println!("Sending 3 test frames...");
-    for i in 0..3 {
+    // Encode and send frames (send 10 frames, encoder will output after buffering a few)
+    println!("Sending test frames...");
+    let mut frames_sent = 0;
+    for i in 0..10 {
         // Create test frame (grayscale gradient)
         let mut frame = vec![0u8; 1920 * 1080 * 4];
         let brightness = ((i + 1) * 80) as u8;
@@ -35,17 +36,24 @@ async fn main() -> Result<()> {
 
         // Encode
         let encoded = encoder.encode(&frame)?;
+
+        if encoded.is_empty() {
+            println!("  Frame {}: Buffered (encoder needs more frames)", i + 1);
+            continue;
+        }
+
         println!("  Frame {}: Encoded to {} bytes", i + 1, encoded.len());
 
         // Send
         QuicServer::send_frame(&connection, &encoded).await?;
         println!("  Frame {}: Sent", i + 1);
+        frames_sent += 1;
 
         tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
     }
 
-    println!("\n✅ All frames sent");
-    println!("Server complete. Client should have received 3 frames.");
+    println!("\n✅ {} frames sent successfully", frames_sent);
+    println!("Server complete.");
 
     // Keep alive briefly
     tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
