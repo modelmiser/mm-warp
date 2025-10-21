@@ -1,6 +1,7 @@
 use anyhow::{Context, Result};
 use quinn::{Connection, Endpoint};
 use std::net::SocketAddr;
+use ffmpeg_next::software::scaling::{context::Context as ScaleContext, flag::Flags};
 use std::sync::Arc;
 
 /// QUIC client for receiving frames
@@ -105,10 +106,35 @@ impl H264Decoder {
 
         match self.decoder.receive_frame(&mut decoded) {
             Ok(_) => {
-                // Successfully decoded frame
-                // Convert to RGBA (stub for now - needs swscale)
+                // Successfully decoded frame (YUV420P)
                 tracing::info!("Decoded frame: {}x{}", decoded.width(), decoded.height());
-                Ok(vec![0u8; (self.width * self.height * 4) as usize])
+
+                // Create RGBA output frame
+                let mut rgba_frame = ffmpeg_next::frame::Video::empty();
+                rgba_frame.set_width(self.width);
+                rgba_frame.set_height(self.height);
+                rgba_frame.set_format(ffmpeg_next::format::Pixel::RGBA);
+                unsafe {
+                    ffmpeg_next::sys::av_frame_get_buffer(rgba_frame.as_mut_ptr(), 0);
+                }
+
+                // Convert YUV420P → RGBA using swscale
+                let mut scaler = ScaleContext::get(
+                    ffmpeg_next::format::Pixel::YUV420P,
+                    self.width,
+                    self.height,
+                    ffmpeg_next::format::Pixel::RGBA,
+                    self.width,
+                    self.height,
+                    Flags::BILINEAR,
+                ).context("Failed to create decoder swscale context")?;
+
+                scaler.run(&decoded, &mut rgba_frame)
+                    .context("Failed to convert YUV420P to RGBA")?;
+
+                // Copy RGBA data to output vector
+                let rgba_data = rgba_frame.data(0);
+                Ok(rgba_data.to_vec())
             }
             Err(_) => {
                 // Decoder buffering, return empty

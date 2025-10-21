@@ -1,15 +1,11 @@
 use anyhow::{Context, Result};
 use wayland_client::{Connection, Dispatch, QueueHandle};
 use wayland_client::globals::{registry_queue_init, GlobalListContents};
-use wayland_client::protocol::{wl_registry, wl_output, wl_shm};
-use wayland_protocols_wlr::screencopy::v1::client::{
-    zwlr_screencopy_manager_v1, zwlr_screencopy_frame_v1,
-};
-use std::os::unix::io::{AsFd, AsRawFd};
+use wayland_client::protocol::wl_registry;
 use std::net::SocketAddr;
-use std::sync::Arc;
 use quinn::{Endpoint, ServerConfig};
 use rustls::pki_types::{CertificateDer, PrivateKeyDer};
+use ffmpeg_next::software::scaling::{context::Context as ScaleContext, flag::Flags};
 
 /// Represents a detected display output
 #[derive(Debug, Clone)]
@@ -118,37 +114,40 @@ impl H264Encoder {
             anyhow::bail!("Frame size mismatch: expected {}, got {}", expected_size, rgba_frame.len());
         }
 
-        // Convert RGBA to YUV420P (simple conversion - could use swscale for better quality)
-        // For now: grayscale Y plane, zero U/V (results in grayscale output)
-        let y_size = (self.width * self.height) as usize;
-        let uv_size = y_size / 4;
-
-        let mut yuv = vec![0u8; y_size + uv_size * 2];
-
-        // Y plane (grayscale from RGB)
-        for (i, rgba) in rgba_frame.chunks(4).enumerate() {
-            let r = rgba[0] as u32;
-            let g = rgba[1] as u32;
-            let b = rgba[2] as u32;
-            yuv[i] = ((66 * r + 129 * g + 25 * b + 128) >> 8) as u8 + 16;
+        // Create RGBA source frame for swscale
+        let mut rgba_src_frame = ffmpeg_next::frame::Video::empty();
+        rgba_src_frame.set_width(self.width);
+        rgba_src_frame.set_height(self.height);
+        rgba_src_frame.set_format(ffmpeg_next::format::Pixel::RGBA);
+        unsafe {
+            ffmpeg_next::sys::av_frame_get_buffer(rgba_src_frame.as_mut_ptr(), 0);
         }
-        // U and V planes stay zero (neutral chroma = grayscale)
 
-        // Create and allocate frame
+        // Copy RGBA data to source frame
+        rgba_src_frame.data_mut(0).copy_from_slice(rgba_frame);
+
+        // Create YUV destination frame
         let mut frame = ffmpeg_next::frame::Video::empty();
         frame.set_width(self.width);
         frame.set_height(self.height);
         frame.set_format(ffmpeg_next::format::Pixel::YUV420P);
-
-        // Allocate frame buffer (CRITICAL - must do before data_mut!)
         unsafe {
             ffmpeg_next::sys::av_frame_get_buffer(frame.as_mut_ptr(), 0);
         }
 
-        // Copy YUV data into frame planes
-        frame.data_mut(0)[..y_size].copy_from_slice(&yuv[..y_size]);
-        frame.data_mut(1)[..uv_size].copy_from_slice(&yuv[y_size..y_size + uv_size]);
-        frame.data_mut(2)[..uv_size].copy_from_slice(&yuv[y_size + uv_size..]);
+        // Convert RGBA → YUV420P using swscale (proper RGB color)
+        let mut scaler = ScaleContext::get(
+            ffmpeg_next::format::Pixel::RGBA,
+            self.width,
+            self.height,
+            ffmpeg_next::format::Pixel::YUV420P,
+            self.width,
+            self.height,
+            Flags::BILINEAR,
+        ).context("Failed to create swscale context")?;
+
+        scaler.run(&rgba_src_frame, &mut frame)
+            .context("Failed to convert RGBA to YUV420P")?;
 
         // Set presentation timestamp (incrementing for each frame)
         frame.set_pts(Some(self.frame_count));
@@ -186,7 +185,7 @@ impl QuicServer {
         let key_der = PrivateKeyDer::try_from(cert.key_pair.serialize_der())
             .map_err(|e| anyhow::anyhow!("Failed to serialize private key: {}", e))?;
 
-        let mut server_config = ServerConfig::with_single_cert(vec![cert_der], key_der)
+        let server_config = ServerConfig::with_single_cert(vec![cert_der], key_der)
             .context("Failed to create server config")?;
 
         let endpoint = Endpoint::server(server_config, addr)
