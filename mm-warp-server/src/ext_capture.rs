@@ -23,6 +23,14 @@ use nix::unistd::ftruncate;
 /// For mm-warp we just need RGB frames in memory (no GPU encoding)
 pub struct ExtCapture {
     connection: Connection,
+    session: ExtImageCopyCaptureSessionV1,
+    shm: wl_shm::WlShm,
+    pool: wl_shm_pool::WlShmPool,
+    buffer: wl_buffer::WlBuffer,
+    mmap: MmapMut,
+    width: u32,
+    height: u32,
+    refresh_rate: u32, // Monitor refresh rate in Hz
 }
 
 /// State for event handling during capture
@@ -35,6 +43,8 @@ struct CaptureState {
     session: Option<ExtImageCopyCaptureSessionV1>,
     buffer: Option<wl_buffer::WlBuffer>,
     mmap: Option<MmapMut>,
+    logical_width: Option<i32>,
+    logical_height: Option<i32>,
 }
 
 impl CaptureState {
@@ -48,17 +58,101 @@ impl CaptureState {
             session: None,
             buffer: None,
             mmap: None,
+            logical_width: None,
+            logical_height: None,
         }
     }
 }
 
 impl ExtCapture {
-    /// Create new ext capture instance
+    /// Create new ext capture instance with reusable resources
     pub fn new() -> Result<Self> {
         let connection = Connection::connect_to_env()
             .context("Failed to connect to Wayland (ext-image-copy-capture)")?;
 
-        Ok(Self { connection })
+        // Initialize registry ONCE
+        let (globals, mut event_queue) = registry_queue_init::<CaptureState>(&connection)
+            .context("Failed to initialize registry")?;
+
+        let qh = event_queue.handle();
+
+        // Bind required managers ONCE
+        let source_mgr: ExtOutputImageCaptureSourceManagerV1 = globals
+            .bind(&qh, 1..=1, ())
+            .context("ext_output_image_capture_source_manager_v1 not available")?;
+
+        let copy_mgr: ExtImageCopyCaptureManagerV1 = globals
+            .bind(&qh, 1..=1, ())
+            .context("ext_image_copy_capture_manager_v1 not available")?;
+
+        let shm: wl_shm::WlShm = globals
+            .bind(&qh, 1..=1, ())
+            .context("wl_shm not available")?;
+
+        let output: wl_output::WlOutput = globals
+            .bind(&qh, 1..=1, ())
+            .context("No output available")?;
+
+        // Create capture source and session ONCE
+        let source = source_mgr.create_source(&output, &qh, ());
+        let session = copy_mgr.create_session(&source, Options::empty(), &qh, ());
+
+        // Get buffer constraints
+        let mut state = CaptureState::new();
+        state.session = Some(session.clone());
+
+        while state.width.is_none() && !state.frame_failed {
+            event_queue.blocking_dispatch(&mut state)
+                .context("Failed to dispatch events")?;
+        }
+
+        if state.frame_failed {
+            anyhow::bail!("Capture session failed during init");
+        }
+
+        let width = state.width.context("No width received")?;
+        let height = state.height.context("No height received")?;
+        let refresh_hz = 60; // Default to 60 Hz (TODO: query from wl_output Mode event)
+
+        tracing::info!("Buffer size: {}x{} @ {} Hz", width, height, refresh_hz);
+
+        // Create shared memory buffer ONCE
+        let stride = width * 4;
+        let size = (stride * height) as usize;
+
+        let fd = memfd::memfd_create(
+            std::ffi::CStr::from_bytes_with_nul(b"ext_cap\0").unwrap(),
+            memfd::MemFdCreateFlag::MFD_CLOEXEC,
+        ).context("Failed to create memfd")?;
+
+        ftruncate(&fd, size as i64).context("Failed to truncate memfd")?;
+
+        let mmap = unsafe {
+            MmapMut::map_mut(&fd).context("Failed to mmap")?
+        };
+
+        let pool = shm.create_pool(fd.as_fd(), size as i32, &qh, ());
+        let buffer = pool.create_buffer(
+            0,
+            width as i32,
+            height as i32,
+            stride as i32,
+            wl_shm::Format::Abgr8888,
+            &qh,
+            (),
+        );
+
+        Ok(Self {
+            connection,
+            session,
+            shm,
+            pool,
+            buffer,
+            mmap,
+            width,
+            height,
+            refresh_rate: refresh_hz,
+        })
     }
 
     /// Check if ext-image-copy-capture is available
@@ -78,130 +172,38 @@ impl ExtCapture {
         false
     }
 
-    /// Capture a single frame using ext-image-copy-capture
+    /// Capture a single frame using ext-image-copy-capture (optimized)
     pub fn capture_frame(&mut self) -> Result<Vec<u8>> {
-        tracing::info!("Capturing frame via ext-image-copy-capture-v1");
+        // Need queue handle for creating frame
+        let (_, mut eq) = registry_queue_init::<CaptureState>(&self.connection)?;
+        let qh = eq.handle();
 
-        // Initialize registry
-        let (globals, mut event_queue) = registry_queue_init::<CaptureState>(&self.connection)
-            .context("Failed to initialize registry")?;
-
-        let qh = event_queue.handle();
-
-        // Bind required managers
-        let source_mgr: ExtOutputImageCaptureSourceManagerV1 = globals
-            .bind(&qh, 1..=1, ())
-            .context("ext_output_image_capture_source_manager_v1 not available")?;
-
-        let copy_mgr: ExtImageCopyCaptureManagerV1 = globals
-            .bind(&qh, 1..=1, ())
-            .context("ext_image_copy_capture_manager_v1 not available")?;
-
-        let shm: wl_shm::WlShm = globals
-            .bind(&qh, 1..=1, ())
-            .context("wl_shm not available")?;
-
-        // Get first output
-        let output: wl_output::WlOutput = globals
-            .bind(&qh, 1..=1, ())
-            .context("No output available")?;
-
-        tracing::debug!("Bound all required managers");
-
-        // Create capture source from output
-        let source = source_mgr.create_source(&output, &qh, ());
-
-        // Create capture session
-        let session = copy_mgr.create_session(&source, Options::empty(), &qh, ());
-
-        // Create state
-        let mut state = CaptureState::new();
-        state.session = Some(session);
-
-        // Dispatch events until we get buffer constraints
-        tracing::debug!("Waiting for buffer constraints...");
-        while state.width.is_none() && !state.frame_failed {
-            event_queue.blocking_dispatch(&mut state)
-                .context("Failed to dispatch events")?;
-        }
-
-        if state.frame_failed {
-            anyhow::bail!("Capture session failed");
-        }
-
-        let width = state.width.context("No width received")?;
-        let height = state.height.context("No height received")?;
-
-        tracing::info!("Buffer size: {}x{}", width, height);
-
-        // Create shared memory buffer
-        let stride = width * 4; // RGBA
-        let size = (stride * height) as usize;
-
-        let fd = memfd::memfd_create(
-            std::ffi::CStr::from_bytes_with_nul(b"ext_shm\0").unwrap(),
-            memfd::MemFdCreateFlag::MFD_CLOEXEC,
-        ).context("Failed to create memfd")?;
-
-        ftruncate(&fd, size as i64).context("Failed to truncate memfd")?;
-
-        let mmap = unsafe {
-            MmapMut::map_mut(&fd).context("Failed to mmap")?
-        };
-
-        // Create wl_shm pool and buffer
-        // Use Abgr8888 (COSMIC's preferred format)
-        let pool = shm.create_pool(fd.as_fd(), size as i32, &qh, ());
-        let buffer = pool.create_buffer(
-            0,
-            width as i32,
-            height as i32,
-            stride as i32,
-            wl_shm::Format::Abgr8888,
-            &qh,
-            (),
-        );
-
-        state.buffer = Some(buffer.clone());
-        state.mmap = Some(mmap);
-
-        tracing::debug!("Created shm buffer");
-
-        // Create and capture frame
-        let frame = state.session.as_ref().unwrap().create_frame(&qh, ());
-        frame.attach_buffer(&buffer);
-        frame.damage_buffer(0, 0, width as i32, height as i32);
+        // Create and capture frame (reusing session and buffer)
+        let frame = self.session.create_frame(&qh, ());
+        frame.attach_buffer(&self.buffer);
+        frame.damage_buffer(0, 0, self.width as i32, self.height as i32);
         frame.capture();
 
-        tracing::debug!("Issued capture request");
-
-        // Wait for frame ready
+        // Wait for frame ready (minimal event loop)
+        let mut state = CaptureState::new();
         while !state.frame_ready && !state.frame_failed {
-            event_queue.blocking_dispatch(&mut state)
-                .context("Failed to dispatch events")?;
+            eq.blocking_dispatch(&mut state)?;
         }
 
         if state.frame_failed {
             anyhow::bail!("Frame capture failed");
         }
 
-        tracing::info!("Frame captured successfully!");
-
-        // Copy from mmap to output buffer (convert ABGR to RGBA)
-        let mut rgba_buffer = vec![0u8; size];
-        let mmap_data = state.mmap.as_ref().unwrap().as_ref();
-
-        for i in 0..(width * height) as usize {
-            let idx = i * 4;
-            // ABGR8888: [R, G, B, A] in little-endian memory (already correct order!)
-            // RGBA: [R, G, B, A]
-            rgba_buffer[idx] = mmap_data[idx];         // R
-            rgba_buffer[idx + 1] = mmap_data[idx + 1]; // G
-            rgba_buffer[idx + 2] = mmap_data[idx + 2]; // B
-            rgba_buffer[idx + 3] = mmap_data[idx + 3]; // A
-        }
+        // Copy from mmap directly (ABGR8888 is already RGBA in little-endian!)
+        let size = (self.width * self.height * 4) as usize;
+        let rgba_buffer = self.mmap.as_ref()[..size].to_vec();
 
         Ok(rgba_buffer)
+    }
+
+    /// Get the monitor's refresh rate in Hz
+    pub fn refresh_rate(&self) -> u32 {
+        self.refresh_rate
     }
 }
 
@@ -285,7 +287,17 @@ impl Dispatch<ExtImageCopyCaptureFrameV1, ()> for CaptureState {
 }
 
 impl Dispatch<wl_output::WlOutput, ()> for CaptureState {
-    fn event(_: &mut Self, _: &wl_output::WlOutput, _: wl_output::Event, _: &(), _: &Connection, _: &QueueHandle<Self>) {}
+    fn event(state: &mut Self, _: &wl_output::WlOutput, event: wl_output::Event, _: &(), _: &Connection, _: &QueueHandle<Self>) {
+        // Capture logical size (accounts for scaling)
+        if let wl_output::Event::Geometry { .. } = event {
+            // Geometry gives physical info, we want logical
+        }
+        if let wl_output::Event::Mode { width, height, .. } = event {
+            tracing::info!("Output mode (logical): {}x{}", width, height);
+            state.logical_width = Some(width);
+            state.logical_height = Some(height);
+        }
+    }
 }
 
 impl Dispatch<wl_shm::WlShm, ()> for CaptureState {

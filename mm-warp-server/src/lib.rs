@@ -99,8 +99,8 @@ impl H264Encoder {
         encoder.set_width(width);
         encoder.set_height(height);
         encoder.set_format(ffmpeg_next::format::Pixel::YUV420P); // libx264 requires YUV
-        encoder.set_time_base((1, 30));
-        encoder.set_frame_rate(Some((30, 1)));
+        encoder.set_time_base((1, 60));
+        encoder.set_frame_rate(Some((60, 1)));
 
         // Low latency settings for streaming
         encoder.set_gop(10); // Reasonable GOP (keyframe every ~0.3s at 30fps)

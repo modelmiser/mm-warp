@@ -456,11 +456,15 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "ffmpeg-next",
+ "memmap2",
+ "nix",
  "quinn",
  "rustls",
  "tokio",
  "tracing",
  "tracing-subscriber",
+ "wayland-client",
+ "wayland-protocols",
 ]
 
 [[package]]

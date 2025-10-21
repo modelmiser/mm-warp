@@ -8,15 +8,17 @@ async fn main() -> Result<()> {
     // Create screen capture
     println!("Initializing ext-image-copy-capture...");
     let mut capture = ExtCapture::new()?;
-    println!("✅ Screen capture ready\n");
+    let monitor_fps = capture.refresh_rate();
+    println!("✅ Screen capture ready");
+    println!("   Monitor refresh rate: {} Hz\n", monitor_fps);
 
     // Start QUIC server
     println!("Starting QUIC server on 127.0.0.1:4433...");
     let mut server = QuicServer::new("127.0.0.1:4433".parse().unwrap()).await?;
     println!("✅ Server listening\n");
 
-    // Create encoder (4K resolution for COSMIC)
-    println!("Creating H.264 encoder (3840x2160)...");
+    // Create encoder (4K resolution for COSMIC at monitor refresh rate)
+    println!("Creating H.264 encoder (3840x2160 @ {} FPS)...", monitor_fps);
     let mut encoder = H264Encoder::new(3840, 2160)?;
     println!("✅ Encoder ready\n");
 
@@ -25,35 +27,72 @@ async fn main() -> Result<()> {
     let connection = server.accept().await?;
     println!("✅ Client connected from {}\n", connection.remote_address());
 
-    // Capture, encode and send frames
-    println!("Capturing and streaming frames...");
-    let mut frames_sent = 0;
-    for i in 0..10 {
+    // Adaptive streaming with stats
+    println!("Streaming with adaptive FPS (5-20 based on motion)... (Ctrl+C to stop)\n");
+    let mut frame_count = 0;
+
+    // Adaptive FPS settings
+    let max_fps = 20;  // Cap at achieved FPS (not monitor rate)
+    let min_fps = 5;   // Drop to 5 when idle
+    let mut current_fps = max_fps;
+
+    // Motion detection threshold (small frames = no motion)
+    let idle_threshold_kb = 25; // Frames < 25KB are probably idle
+
+    // Stats tracking
+    let mut stats_start = tokio::time::Instant::now();
+    let mut interval_bytes = 0u64;
+    let mut interval_frames = 0u64;
+
+    loop {
+        let start = tokio::time::Instant::now();
+
         // Capture real frame from COSMIC desktop
-        print!("Frame {}/10: Capturing... ", i + 1);
         let frame = capture.capture_frame()?;
-        print!("{}MB, encoding... ", frame.len() / 1024 / 1024);
 
         // Encode to H.264
         let encoded = encoder.encode(&frame)?;
 
-        if encoded.is_empty() {
-            println!("buffered");
-            continue;
+        if !encoded.is_empty() {
+            // Send
+            QuicServer::send_frame(&connection, &encoded).await?;
+            frame_count += 1;
+
+            let frame_size = encoded.len() as u64;
+            let frame_kb = frame_size / 1024;
+            interval_bytes += frame_size;
+            interval_frames += 1;
+
+            // Adaptive FPS: small frames = no motion, drop FPS
+            if frame_kb < idle_threshold_kb {
+                current_fps = min_fps; // Idle - drop to 5 FPS
+            } else {
+                current_fps = max_fps; // Motion detected - max FPS
+            }
+
+            // Print stats every second
+            let elapsed = stats_start.elapsed();
+            if elapsed.as_secs() >= 1 {
+                let fps = interval_frames as f64 / elapsed.as_secs_f64();
+                let mbps = (interval_bytes as f64 * 8.0) / (elapsed.as_secs_f64() * 1_000_000.0);
+                let avg_kb = interval_bytes / interval_frames / 1024;
+
+                println!("FPS: {:.1} (target: {}) | Bitrate: {:.2} Mbps | Avg: {}KB/frame | Total: {}",
+                    fps, current_fps, mbps, avg_kb, frame_count);
+
+                stats_start = tokio::time::Instant::now();
+                interval_bytes = 0;
+                interval_frames = 0;
+            }
         }
 
-        print!("{}KB, sending... ", encoded.len() / 1024);
-
-        // Send
-        QuicServer::send_frame(&connection, &encoded).await?;
-        println!("✅ sent");
-        frames_sent += 1;
-
-        tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+        // Maintain adaptive FPS
+        let frame_duration = tokio::time::Duration::from_millis(1000 / current_fps as u64);
+        let elapsed = start.elapsed();
+        if elapsed < frame_duration {
+            tokio::time::sleep(frame_duration - elapsed).await;
+        }
     }
-
-    println!("\n✅ {} frames sent successfully", frames_sent);
-    println!("Server complete.");
 
     // Keep alive briefly
     tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;

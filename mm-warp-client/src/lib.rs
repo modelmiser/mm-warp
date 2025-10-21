@@ -4,6 +4,9 @@ use std::net::SocketAddr;
 use ffmpeg_next::software::scaling::{context::Context as ScaleContext, flag::Flags};
 use std::sync::Arc;
 
+// Wayland display module
+pub mod wayland_display;
+
 /// QUIC client for receiving frames
 pub struct QuicClient {
     endpoint: Endpoint,

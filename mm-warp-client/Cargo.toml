@@ -13,3 +13,9 @@ tracing-subscriber = { workspace = true }
 
 # Video decoding
 ffmpeg-next = { workspace = true }
+
+# Wayland display
+wayland-client = "0.31"
+wayland-protocols = { version = "0.32", features = ["client", "staging"] }
+memmap2 = "0.9"
+nix = { version = "0.29", features = ["fs", "mman"] }
