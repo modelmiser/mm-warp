@@ -74,6 +74,7 @@ pub struct H264Encoder {
     encoder: ffmpeg_next::encoder::Video,
     width: u32,
     height: u32,
+    frame_count: i64,
 }
 
 impl H264Encoder {
@@ -92,10 +93,22 @@ impl H264Encoder {
         encoder.set_height(height);
         encoder.set_format(ffmpeg_next::format::Pixel::YUV420P); // libx264 requires YUV
         encoder.set_time_base((1, 30));
+        encoder.set_frame_rate(Some((30, 1)));
 
-        let encoder = encoder.open_as(codec).context("Failed to open encoder")?;
+        // Low latency settings for streaming
+        encoder.set_gop(10); // Reasonable GOP (keyframe every ~0.3s at 30fps)
+        encoder.set_max_b_frames(0); // No B-frames (reduces latency)
 
-        Ok(Self { encoder, width, height })
+        // x264-specific options for zero-latency streaming
+        let mut opts = ffmpeg_next::Dictionary::new();
+        opts.set("preset", "ultrafast");      // Fast encoding
+        opts.set("tune", "zerolatency");      // Optimize for low latency
+        opts.set("intra-refresh", "1");       // Gradual intra refresh (smoother)
+        opts.set("rc-lookahead", "0");        // No lookahead (immediate output)
+
+        let encoder = encoder.open_with(opts).context("Failed to open encoder")?;
+
+        Ok(Self { encoder, width, height, frame_count: 0 })
     }
 
     /// Encode RGBA frame to H.264
@@ -121,15 +134,25 @@ impl H264Encoder {
         }
         // U and V planes stay zero (neutral chroma = grayscale)
 
-        // Create frame
-        let mut frame = ffmpeg_next::frame::Video::new(
-            ffmpeg_next::format::Pixel::YUV420P,
-            self.width,
-            self.height
-        );
+        // Create and allocate frame
+        let mut frame = ffmpeg_next::frame::Video::empty();
+        frame.set_width(self.width);
+        frame.set_height(self.height);
+        frame.set_format(ffmpeg_next::format::Pixel::YUV420P);
+
+        // Allocate frame buffer (CRITICAL - must do before data_mut!)
+        unsafe {
+            ffmpeg_next::sys::av_frame_get_buffer(frame.as_mut_ptr(), 0);
+        }
+
+        // Copy YUV data into frame planes
         frame.data_mut(0)[..y_size].copy_from_slice(&yuv[..y_size]);
         frame.data_mut(1)[..uv_size].copy_from_slice(&yuv[y_size..y_size + uv_size]);
         frame.data_mut(2)[..uv_size].copy_from_slice(&yuv[y_size + uv_size..]);
+
+        // Set presentation timestamp (incrementing for each frame)
+        frame.set_pts(Some(self.frame_count));
+        self.frame_count += 1;
 
         // Encode
         self.encoder.send_frame(&frame)
@@ -138,16 +161,12 @@ impl H264Encoder {
         let mut packet = ffmpeg_next::Packet::empty();
         let mut encoded = Vec::new();
 
+        // Receive all available packets
         while self.encoder.receive_packet(&mut packet).is_ok() {
             encoded.extend_from_slice(packet.data().unwrap_or(&[]));
         }
 
-        if encoded.is_empty() {
-            // Encoder buffering, return dummy packet
-            Ok(vec![0u8; 32])
-        } else {
-            Ok(encoded)
-        }
+        Ok(encoded)
     }
 }
 
