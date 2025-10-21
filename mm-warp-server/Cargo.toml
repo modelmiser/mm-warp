@@ -21,3 +21,6 @@ memmap2 = "0.9"
 
 # Certificate generation
 rcgen = "0.13"
+
+# Video encoding
+ffmpeg-next = { workspace = true }
