@@ -90,7 +90,7 @@ impl H264Encoder {
 
         encoder.set_width(width);
         encoder.set_height(height);
-        encoder.set_format(ffmpeg_next::format::Pixel::RGB24);
+        encoder.set_format(ffmpeg_next::format::Pixel::YUV420P); // libx264 requires YUV
         encoder.set_time_base((1, 30));
 
         let encoder = encoder.open_as(codec).context("Failed to open encoder")?;
@@ -105,19 +105,31 @@ impl H264Encoder {
             anyhow::bail!("Frame size mismatch: expected {}, got {}", expected_size, rgba_frame.len());
         }
 
-        // Convert RGBA to RGB24 (drop alpha channel)
-        let rgb: Vec<u8> = rgba_frame.chunks(4)
-            .flat_map(|rgba| &rgba[0..3])
-            .copied()
-            .collect();
+        // Convert RGBA to YUV420P (simple conversion - could use swscale for better quality)
+        // For now: grayscale Y plane, zero U/V (results in grayscale output)
+        let y_size = (self.width * self.height) as usize;
+        let uv_size = y_size / 4;
+
+        let mut yuv = vec![0u8; y_size + uv_size * 2];
+
+        // Y plane (grayscale from RGB)
+        for (i, rgba) in rgba_frame.chunks(4).enumerate() {
+            let r = rgba[0] as u32;
+            let g = rgba[1] as u32;
+            let b = rgba[2] as u32;
+            yuv[i] = ((66 * r + 129 * g + 25 * b + 128) >> 8) as u8 + 16;
+        }
+        // U and V planes stay zero (neutral chroma = grayscale)
 
         // Create frame
         let mut frame = ffmpeg_next::frame::Video::new(
-            ffmpeg_next::format::Pixel::RGB24,
+            ffmpeg_next::format::Pixel::YUV420P,
             self.width,
             self.height
         );
-        frame.data_mut(0).copy_from_slice(&rgb);
+        frame.data_mut(0)[..y_size].copy_from_slice(&yuv[..y_size]);
+        frame.data_mut(1)[..uv_size].copy_from_slice(&yuv[y_size..y_size + uv_size]);
+        frame.data_mut(2)[..uv_size].copy_from_slice(&yuv[y_size + uv_size..]);
 
         // Encode
         self.encoder.send_frame(&frame)
