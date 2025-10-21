@@ -6,6 +6,7 @@ edition = "2021"
 [dependencies]
 tokio = { workspace = true }
 quinn = { workspace = true }
+rustls = { workspace = true }
 anyhow = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
@@ -17,3 +18,6 @@ wayland-protocols-wlr = { version = "0.3", features = ["client"] }
 
 # Screen capture
 memmap2 = "0.9"
+
+# Certificate generation
+rcgen = "0.13"
