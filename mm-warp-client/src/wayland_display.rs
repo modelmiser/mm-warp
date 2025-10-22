@@ -50,7 +50,8 @@ impl Dispatch<wl_pointer::WlPointer, ()> for State {
                 });
             }
             wl_pointer::Event::Button { button, state: btn_state, .. } => {
-                let pressed = btn_state == wl_pointer::ButtonState::Pressed;
+                use wayland_client::WEnum;
+                let pressed = matches!(btn_state, WEnum::Value(wl_pointer::ButtonState::Pressed));
                 let mut events = state.pending_events.lock().unwrap();
                 events.push(crate::InputEvent::MouseButton { button, pressed });
             }
@@ -63,12 +64,13 @@ impl Dispatch<wl_keyboard::WlKeyboard, ()> for State {
     fn event(state: &mut Self, _: &wl_keyboard::WlKeyboard, event: wl_keyboard::Event, _: &(), _: &Connection, _: &QueueHandle<Self>) {
         match event {
             wl_keyboard::Event::Key { key, state: key_state, .. } => {
+                use wayland_client::WEnum;
                 let mut events = state.pending_events.lock().unwrap();
                 match key_state {
-                    wl_keyboard::KeyState::Pressed => {
+                    WEnum::Value(wl_keyboard::KeyState::Pressed) => {
                         events.push(crate::InputEvent::KeyPress { key });
                     }
-                    wl_keyboard::KeyState::Released => {
+                    WEnum::Value(wl_keyboard::KeyState::Released) => {
                         events.push(crate::InputEvent::KeyRelease { key });
                     }
                     _ => {}
@@ -138,11 +140,10 @@ impl WaylandDisplay {
             pending_events: pending_events.clone(),
         };
 
-        // Can't use registry_queue_init with stateful State
-        // Need manual registry setup for input events
-        // For now, simplified: create without input (add later)
-
-        let qh = _event_queue.handle();
+        // Initialize globals
+        let (globals, mut event_queue) = registry_queue_init::<State>(&connection)
+            .context("Failed to initialize registry")?;
+        let qh = event_queue.handle();
 
         let compositor: wl_compositor::WlCompositor = globals
             .bind(&qh, 1..=1, ())
@@ -159,15 +160,6 @@ impl WaylandDisplay {
         let viewporter: wp_viewporter::WpViewporter = globals
             .bind(&qh, 1..=1, ())
             .context("wp_viewporter not available")?;
-
-        // Bind seat for input
-        let seat: wl_seat::WlSeat = globals
-            .bind(&qh, 1..=1, ())
-            .context("wl_seat not available")?;
-
-        // Get pointer and keyboard
-        let pointer = seat.get_pointer(&qh, ());
-        let keyboard = seat.get_keyboard(&qh, ());
 
         // Create surface and make it a window
         let surface = compositor.create_surface(&qh, ());

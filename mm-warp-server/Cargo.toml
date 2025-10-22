@@ -26,3 +26,6 @@ rcgen = "0.13"
 # Video encoding
 ffmpeg-next = { workspace = true }
 
+# Input injection
+evdev = "0.12"
+

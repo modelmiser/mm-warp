@@ -7,6 +7,10 @@ use std::sync::Arc;
 // Wayland display module
 pub mod wayland_display;
 
+// Input event handling
+pub mod input_event;
+pub use input_event::InputEvent;
+
 /// QUIC client for receiving frames
 pub struct QuicClient {
     endpoint: Endpoint,
@@ -144,58 +148,6 @@ impl H264Decoder {
                 Ok(Vec::new())
             }
         }
-    }
-}
-
-/// Input event types
-#[derive(Debug, Clone)]
-pub enum InputEvent {
-    KeyPress { key: u32 },
-    KeyRelease { key: u32 },
-    MouseMove { x: i32, y: i32 },
-    MouseButton { button: u32, pressed: bool },
-}
-
-impl InputEvent {
-    /// Serialize event to bytes for network transmission
-    pub fn to_bytes(&self) -> Vec<u8> {
-        match self {
-            InputEvent::KeyPress { key } => {
-                let mut buf = vec![1u8]; // Type: KeyPress
-                buf.extend_from_slice(&key.to_be_bytes());
-                buf
-            }
-            InputEvent::KeyRelease { key } => {
-                let mut buf = vec![2u8]; // Type: KeyRelease
-                buf.extend_from_slice(&key.to_be_bytes());
-                buf
-            }
-            InputEvent::MouseMove { x, y } => {
-                let mut buf = vec![3u8]; // Type: MouseMove
-                buf.extend_from_slice(&x.to_be_bytes());
-                buf.extend_from_slice(&y.to_be_bytes());
-                buf
-            }
-            InputEvent::MouseButton { button, pressed } => {
-                let mut buf = vec![4u8]; // Type: MouseButton
-                buf.extend_from_slice(&button.to_be_bytes());
-                buf.push(if *pressed { 1 } else { 0 });
-                buf
-            }
-        }
-    }
-
-    /// Send input event over QUIC connection
-    pub async fn send(connection: &Connection, event: InputEvent) -> Result<()> {
-        let bytes = event.to_bytes();
-
-        // Send as datagram (unreliable, fast)
-        connection.send_datagram(bytes.into())
-            .context("Failed to send input event")?;
-
-        tracing::trace!("Sent input event: {:?}", event);
-
-        Ok(())
     }
 }
 

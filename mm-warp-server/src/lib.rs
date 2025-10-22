@@ -18,6 +18,12 @@ use nix::unistd::ftruncate;
 // ext-image-copy-capture-v1 support (COSMIC, newer compositors)
 pub mod ext_capture;
 
+// Input event handling
+pub mod input_event;
+pub mod input_inject;
+pub use input_event::InputEvent;
+pub use input_inject::InputInjector;
+
 /// Represents a detected display output
 #[derive(Debug, Clone)]
 pub struct Display {
