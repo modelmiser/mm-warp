@@ -95,7 +95,8 @@ impl ExtCapture {
 
         // Create capture source and session ONCE
         let source = source_mgr.create_source(&output, &qh, ());
-        let session = copy_mgr.create_session(&source, Options::empty(), &qh, ());
+        // Use PaintCursors to include cursor in capture
+        let session = copy_mgr.create_session(&source, Options::PaintCursors, &qh, ());
 
         // Get buffer constraints
         let mut state = CaptureState::new();
