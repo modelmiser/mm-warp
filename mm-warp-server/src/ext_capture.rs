@@ -45,6 +45,7 @@ struct CaptureState {
     mmap: Option<MmapMut>,
     logical_width: Option<i32>,
     logical_height: Option<i32>,
+    refresh_rate: Option<u32>, // Monitor refresh rate from wl_output mode
 }
 
 impl CaptureState {
@@ -58,6 +59,7 @@ impl CaptureState {
             session: None,
             buffer: None,
             mmap: None,
+            refresh_rate: None,
             logical_width: None,
             logical_height: None,
         }
@@ -113,7 +115,7 @@ impl ExtCapture {
 
         let width = state.width.context("No width received")?;
         let height = state.height.context("No height received")?;
-        let refresh_hz = 60; // Default to 60 Hz (TODO: query from wl_output Mode event)
+        let refresh_hz = state.refresh_rate.unwrap_or(60); // Default to 60 Hz if not reported
 
         tracing::info!("Buffer size: {}x{} @ {} Hz", width, height, refresh_hz);
 
@@ -293,10 +295,12 @@ impl Dispatch<wl_output::WlOutput, ()> for CaptureState {
         if let wl_output::Event::Geometry { .. } = event {
             // Geometry gives physical info, we want logical
         }
-        if let wl_output::Event::Mode { width, height, .. } = event {
-            tracing::info!("Output mode (logical): {}x{}", width, height);
+        if let wl_output::Event::Mode { width, height, refresh, .. } = event {
+            let refresh_hz = (refresh / 1000) as u32; // mHz to Hz
+            tracing::info!("Output mode: {}x{} @ {} Hz", width, height, refresh_hz);
             state.logical_width = Some(width);
             state.logical_height = Some(height);
+            state.refresh_rate = Some(refresh_hz);
         }
     }
 }

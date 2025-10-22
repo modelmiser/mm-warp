@@ -17,8 +17,8 @@ async fn main() -> Result<()> {
     let mut server = QuicServer::new("127.0.0.1:4433".parse().unwrap()).await?;
     println!("✅ Server listening\n");
 
-    // Create encoder (4K resolution for COSMIC at monitor refresh rate)
-    println!("Creating H.264 encoder (3840x2160 @ {} FPS)...", monitor_fps);
+    // Create encoder (4K resolution)
+    println!("Creating H.264 encoder (3840x2160)...");
     let mut encoder = H264Encoder::new(3840, 2160)?;
     println!("✅ Encoder ready\n");
 
@@ -85,14 +85,16 @@ async fn main() -> Result<()> {
         println!("Input receiver task ended");
     });
 
-        // Adaptive streaming with stats
-        println!("Streaming with adaptive FPS (5-20 based on motion)...\n");
-        let mut frame_count = 0;
-
         // Adaptive FPS settings
-        let max_fps = 20;  // Cap at achieved FPS (not monitor rate)
+        // Cap at 60 FPS (reasonable max for remote desktop, even if monitor is higher)
+        // Reality: Compositor capture is the bottleneck (~18-20 FPS for 4K on COSMIC)
+        let max_fps = monitor_fps.min(60);
         let min_fps = 5;   // Drop to 5 when idle
         let mut current_fps = max_fps;
+
+        // Start streaming
+        println!("Streaming with adaptive FPS ({}-{} based on motion)...\n", min_fps, max_fps);
+        let mut frame_count = 0;
 
         // Motion detection threshold (small frames = no motion)
         let idle_threshold_kb = 25; // Frames < 25KB are probably idle
