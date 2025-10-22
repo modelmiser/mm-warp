@@ -124,6 +124,13 @@ impl H264Encoder {
         Ok(Self { encoder, width, height, frame_count: 0 })
     }
 
+    /// Force next frame to be a keyframe (IDR frame with SPS/PPS)
+    /// Call this when a new client connects to ensure they get codec parameters
+    pub fn force_keyframe(&mut self) {
+        // Reset frame count to force keyframe on next encode
+        self.frame_count = 0;
+    }
+
     /// Encode RGBA frame to H.264
     pub fn encode(&mut self, rgba_frame: &[u8]) -> Result<Vec<u8>> {
         let expected_size = (self.width * self.height * 4) as usize;

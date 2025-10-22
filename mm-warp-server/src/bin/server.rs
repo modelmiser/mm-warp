@@ -30,6 +30,11 @@ async fn main() -> Result<()> {
         let connection = match server.accept().await {
             Ok(conn) => {
                 println!("✅ Client connected from {}", conn.remote_address());
+
+                // Force keyframe for new client (ensures they get SPS/PPS headers)
+                encoder.force_keyframe();
+                println!("   Forcing keyframe with codec parameters for new client\n");
+
                 conn
             }
             Err(e) => {
@@ -121,8 +126,13 @@ async fn main() -> Result<()> {
             if !encoded.is_empty() {
                 // Send - break on error (client disconnected)
                 if let Err(e) = QuicServer::send_frame(&connection, &encoded).await {
-                    println!("Client disconnected: {}", e);
-                    break Ok(());
+                    // Check if clean disconnect or error
+                    let err_msg = e.to_string();
+                    if err_msg.contains("Connection lost") || err_msg.contains("Stopped") {
+                        break Err(anyhow::anyhow!("Client disconnected unexpectedly"));
+                    } else {
+                        break Err(e);
+                    }
                 }
                 frame_count += 1;
 
@@ -145,7 +155,7 @@ async fn main() -> Result<()> {
                     let mbps = (interval_bytes as f64 * 8.0) / (elapsed.as_secs_f64() * 1_000_000.0);
                     let avg_kb = interval_bytes / interval_frames / 1024;
 
-                    println!("FPS: {:.1} (target: {}) | Bitrate: {:.2} Mbps | Avg: {}KB/frame | Total: {}",
+                    println!("[SERVER] FPS: {:.1} (target: {}) | Bitrate: {:.2} Mbps | Avg: {}KB | Total: {} frames",
                         fps, current_fps, mbps, avg_kb, frame_count);
 
                     stats_start = tokio::time::Instant::now();

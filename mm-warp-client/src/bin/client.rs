@@ -61,7 +61,15 @@ async fn main() -> Result<()> {
 
         let decoded = decoder.decode(&encoded)?;
         if !decoded.is_empty() {
-            display.display_frame(&decoded)?;
+            // Display frame - handle Wayland errors gracefully
+            if let Err(e) = display.display_frame(&decoded) {
+                if e.to_string().contains("Broken pipe") {
+                    println!("\n✅ Window closed - disconnecting gracefully");
+                    return Ok(());
+                }
+                return Err(e);
+            }
+
             frame_count += 1;
             interval_frames += 1;
             interval_bytes += frame_size;
@@ -79,7 +87,7 @@ async fn main() -> Result<()> {
                 let mbps = (interval_bytes as f64 * 8.0) / (elapsed.as_secs_f64() * 1_000_000.0);
                 let avg_kb = if interval_frames > 0 { interval_bytes / interval_frames / 1024 } else { 0 };
 
-                println!("FPS: {:.1} | Bitrate: {:.2} Mbps | Avg: {}KB/frame | Total: {} frames",
+                println!("[CLIENT] FPS: {:.1} | Bitrate: {:.2} Mbps | Avg: {}KB | Total: {} frames",
                     fps, mbps, avg_kb, frame_count);
 
                 stats_start = tokio::time::Instant::now();
