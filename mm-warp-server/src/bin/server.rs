@@ -157,7 +157,7 @@ async fn main() -> Result<()> {
                     let mbps = (interval_bytes as f64 * 8.0) / (elapsed.as_secs_f64() * 1_000_000.0);
                     let avg_kb = interval_bytes / interval_frames / 1024;
 
-                    println!("[SERVER] FPS: {:.1} (target: {}) | Bitrate: {:.2} Mbps | Avg: {}KB | Total: {} frames",
+                    println!("[SERVER] FPS: {:.1} (limit: {}) | Bitrate: {:.2} Mbps | Avg: {}KB | Total: {} frames",
                         fps, current_fps, mbps, avg_kb, frame_count);
 
                     stats_start = tokio::time::Instant::now();

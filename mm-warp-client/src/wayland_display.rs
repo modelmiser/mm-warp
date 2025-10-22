@@ -270,10 +270,15 @@ impl WaylandDisplay {
 
     /// Poll and return any pending input events
     pub fn poll_input_events(&mut self) -> Vec<crate::InputEvent> {
-        // Dispatch Wayland events (non-blocking)
-        let _ = self.event_queue.dispatch_pending(&mut State {
+        // Flush pending requests
+        let _ = self.connection.flush();
+
+        // Read from Wayland socket and dispatch events
+        // roundtrip() is needed to actually read from socket (dispatch_pending doesn't!)
+        let mut state = State {
             pending_events: self.pending_events.clone(),
-        });
+        };
+        let _ = self.event_queue.roundtrip(&mut state);
 
         // Return collected events
         let mut events = self.pending_events.lock().unwrap();

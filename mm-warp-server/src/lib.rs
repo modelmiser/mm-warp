@@ -88,6 +88,7 @@ pub struct H264Encoder {
     width: u32,
     height: u32,
     frame_count: i64,
+    force_keyframe_next: bool,
 }
 
 impl H264Encoder {
@@ -121,14 +122,13 @@ impl H264Encoder {
 
         let encoder = encoder.open_with(opts).context("Failed to open encoder")?;
 
-        Ok(Self { encoder, width, height, frame_count: 0 })
+        Ok(Self { encoder, width, height, frame_count: 0, force_keyframe_next: false })
     }
 
     /// Force next frame to be a keyframe (IDR frame with SPS/PPS)
     /// Call this when a new client connects to ensure they get codec parameters
     pub fn force_keyframe(&mut self) {
-        // Reset frame count to force keyframe on next encode
-        self.frame_count = 0;
+        self.force_keyframe_next = true;
     }
 
     /// Encode RGBA frame to H.264
@@ -176,6 +176,12 @@ impl H264Encoder {
         // Set presentation timestamp (incrementing for each frame)
         frame.set_pts(Some(self.frame_count));
         self.frame_count += 1;
+
+        // Force keyframe if requested (for new client connections)
+        if self.force_keyframe_next {
+            frame.set_kind(ffmpeg_next::util::picture::Type::I); // Force I-frame (keyframe)
+            self.force_keyframe_next = false;
+        }
 
         // Encode
         self.encoder.send_frame(&frame)
