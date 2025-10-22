@@ -32,4 +32,34 @@ impl InputInjector {
         ])?;
         Ok(())
     }
+
+    pub fn inject_mouse_move(&mut self, x: i32, y: i32) -> Result<()> {
+        std::process::Command::new("ydotool")
+            .args(&["mousemove", "--absolute", &x.to_string(), &y.to_string()])
+            .output()
+            .context("ydotool not found - install: sudo apt install ydotool")?;
+        Ok(())
+    }
+
+    pub fn inject_mouse_button(&mut self, button: u32, pressed: bool) -> Result<()> {
+        // Only handle button press (ydotool click does press+release)
+        if !pressed {
+            return Ok(());
+        }
+
+        // Wayland button codes: 272=left, 273=right, 274=middle
+        // ydotool codes: 0x40=left, 0x41=right, 0x42=middle
+        let ydotool_button = match button {
+            272 => "0x40", // BTN_LEFT
+            273 => "0x41", // BTN_RIGHT
+            274 => "0x42", // BTN_MIDDLE
+            _ => return Ok(()), // Ignore unknown buttons
+        };
+
+        std::process::Command::new("ydotool")
+            .args(&["click", ydotool_button])
+            .output()
+            .context("ydotool failed")?;
+        Ok(())
+    }
 }

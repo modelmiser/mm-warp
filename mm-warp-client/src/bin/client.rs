@@ -38,24 +38,9 @@ async fn main() -> Result<()> {
     let mut display = WaylandDisplay::new(3840, 2160)?;
     println!("✅ Display ready\n");
 
-    // Spawn keyboard test sender (sends 'a' key every 2 seconds)
-    let connection_clone = connection.clone();
-    tokio::spawn(async move {
-        tokio::time::sleep(tokio::time::Duration::from_secs(2)).await; // Initial delay
-        println!("🎹 Keyboard test active: typing 'a' every 2 seconds (focus text editor on server!)\n");
-
-        loop {
-            tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
-
-            // Send 'a' key press (evdev keycode 30)
-            let _ = InputEvent::send(&connection_clone, InputEvent::KeyPress { key: 30 }).await;
-            tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
-            let _ = InputEvent::send(&connection_clone, InputEvent::KeyRelease { key: 30 }).await;
-        }
-    });
-
     // Receive, decode and display frames continuously with stats
-    println!("Receiving and displaying... (Ctrl+C to stop)\n");
+    println!("Receiving and displaying...");
+    println!("🎹 Real keyboard/mouse control active! Focus the window and type.\n");
     let mut frame_count = 0;
 
     // Stats tracking
@@ -80,6 +65,12 @@ async fn main() -> Result<()> {
             frame_count += 1;
             interval_frames += 1;
             interval_bytes += frame_size;
+
+            // Poll and send input events
+            let input_events = display.poll_input_events();
+            for event in input_events {
+                let _ = InputEvent::send(&connection, event).await;
+            }
 
             // Print stats every second
             let elapsed = stats_start.elapsed();

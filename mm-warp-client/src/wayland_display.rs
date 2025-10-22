@@ -1,7 +1,7 @@
 // Wayland window for displaying received frames
 use anyhow::{Context, Result};
 use std::os::fd::AsFd;
-use wayland_client::{Connection, Dispatch, QueueHandle, Proxy};
+use wayland_client::{Connection, Dispatch, QueueHandle};
 use wayland_client::globals::{registry_queue_init, GlobalListContents};
 use wayland_client::protocol::{wl_compositor, wl_surface, wl_shm, wl_shm_pool, wl_buffer, wl_registry, wl_seat, wl_pointer, wl_keyboard};
 use wayland_protocols::xdg::shell::client::{xdg_wm_base, xdg_surface, xdg_toplevel};
@@ -24,6 +24,7 @@ pub struct WaylandDisplay {
     buffer_width: u32,
     buffer_height: u32,
     pending_events: Arc<Mutex<Vec<crate::InputEvent>>>,
+    event_queue: wayland_client::EventQueue<State>,
 }
 
 // State for input event collection
@@ -136,7 +137,7 @@ impl WaylandDisplay {
 
         let pending_events = Arc::new(Mutex::new(Vec::new()));
 
-        let state = State {
+        let mut state = State {
             pending_events: pending_events.clone(),
         };
 
@@ -160,6 +161,15 @@ impl WaylandDisplay {
         let viewporter: wp_viewporter::WpViewporter = globals
             .bind(&qh, 1..=1, ())
             .context("wp_viewporter not available")?;
+
+        // Bind seat for input events
+        let seat: wl_seat::WlSeat = globals
+            .bind(&qh, 1..=1, ())
+            .context("wl_seat not available")?;
+
+        // Get keyboard and pointer from seat
+        let _keyboard = seat.get_keyboard(&qh, ());
+        let _pointer = seat.get_pointer(&qh, ());
 
         // Create surface and make it a window
         let surface = compositor.create_surface(&qh, ());
@@ -207,6 +217,9 @@ impl WaylandDisplay {
         // Initial commit to create the window
         surface.commit();
 
+        // Dispatch initial events
+        event_queue.roundtrip(&mut state).context("Failed to roundtrip")?;
+
         Ok(Self {
             connection,
             surface,
@@ -220,6 +233,7 @@ impl WaylandDisplay {
             buffer_width: width,
             buffer_height: height,
             pending_events: pending_events.clone(),
+            event_queue,
         })
     }
 
@@ -256,6 +270,12 @@ impl WaylandDisplay {
 
     /// Poll and return any pending input events
     pub fn poll_input_events(&mut self) -> Vec<crate::InputEvent> {
+        // Dispatch Wayland events (non-blocking)
+        let _ = self.event_queue.dispatch_pending(&mut State {
+            pending_events: self.pending_events.clone(),
+        });
+
+        // Return collected events
         let mut events = self.pending_events.lock().unwrap();
         let result = events.clone();
         events.clear();

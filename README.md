@@ -55,7 +55,48 @@ sudo -E ./target/release/server
 
 See [Troubleshooting](#troubleshooting) below for details.
 
-### 3. Run
+### 3. Setup Mouse Control (Optional - Honest Disclaimer)
+
+**mm-warp uses ydotool for mouse injection. This is duct tape, and we're transparent about it.**
+
+**Why duct tape?**
+- Wayland has **no standard input injection protocol** (by design - security)
+- Compositor-specific protocols exist (wlr-virtual-pointer) but only work on Sway/Hyprland
+- COSMIC, GNOME, and KDE don't support those protocols
+- ydotool is a **pragmatic workaround** that works everywhere
+
+**Trade-offs:**
+- ✅ Works on all compositors (COSMIC, Sway, Hyprland, GNOME, KDE)
+- ✅ Battle-tested (used by automation tools for years)
+- ⚠️  External dependency (requires install + daemon)
+- ⚠️  ~1ms overhead per mouse event (barely noticeable)
+
+**We know this isn't elegant.** If Wayland standardizes input injection, we'll migrate immediately. For now, this works.
+
+**Install ydotool:**
+```bash
+# Ubuntu/Debian
+sudo apt install ydotool
+
+# Arch Linux
+sudo pacman -S ydotool
+
+# From source (if not in repos)
+# https://github.com/ReimuNotMoe/ydotool
+```
+
+**Start the daemon:**
+```bash
+# Option 1: Manual (for testing)
+sudo ydotoold &
+
+# Option 2: Systemd service (automatic on boot)
+sudo systemctl enable --now ydotool
+```
+
+**Without ydotool:** Keyboard control still works perfectly! Many workflows (terminals, vim, tmux) are keyboard-native anyway. Use Tab/arrows/Enter to navigate.
+
+### 4. Run
 
 **Terminal 1 (Server):**
 ```bash
@@ -72,7 +113,8 @@ See [Troubleshooting](#troubleshooting) below for details.
 **What you'll see:**
 - Client window shows your COSMIC desktop at 4K
 - Server prints stats: `FPS: 18.2 | Bitrate: 14.23 Mbps`
-- Client auto-types 'a' every 2 seconds (test keyboard injection)
+- **Focus the client window and type** - your keystrokes appear on the server!
+- **Move your mouse in the client window** - cursor moves on server (requires ydotool)
 
 ## Features
 
@@ -80,17 +122,17 @@ See [Troubleshooting](#troubleshooting) below for details.
 
 - **4K Screen Capture** (18-20 FPS on COSMIC)
 - **H.264 Streaming** (11-35 Mbps adaptive bitrate)
-- **Keyboard Control** (via uinput)
+- **Full Keyboard Control** (real Wayland keyboard capture)
+- **Full Mouse Control** (movement + clicks via ydotool)
 - **Cursor Visible** (painted in stream)
 - **Reconnection** (server accepts new clients)
 - **Adaptive FPS** (5 FPS idle, 20 FPS on motion)
 
-### 🚧 Coming Soon
+### 🚧 Future Enhancements
 
-- **Mouse Control** (via ydotool - see [MOUSE-CURSOR-METHODS.md](MOUSE-CURSOR-METHODS.md))
-- **Real Keyboard Capture** (currently just test sender)
 - **Multi-display** (select which monitor)
 - **Configuration File** (bitrate, resolution, etc.)
+- **Audio Streaming** (synchronized with video)
 
 ## Test Binaries
 
@@ -212,26 +254,36 @@ FPS: 18.2 (target: 20) | Bitrate: 14.23 Mbps | Avg: 124KB/frame
 
 ### Keyboard not working
 
-**Current status:** Client sends test keys only (types 'a' every 2 seconds)
+**Check:**
+1. Is server running with proper uinput access?
+2. Is the client window **focused**? (Wayland only captures input from focused window)
+3. Try typing in a text editor on the server
 
-**Real keyboard capture:** Not implemented yet (coming soon)
-
-**To verify keyboard injection works:**
-1. Run server with proper uinput access
-2. Run client
-3. Focus a text editor on server machine
-4. Should see 'a' appear every 2 seconds
+**Still not working?** Check server output for input injector errors.
 
 ### Mouse not working
 
-**Expected!** Mouse control not implemented yet.
+**Did you install ydotool?**
+```bash
+# Install
+sudo apt install ydotool
 
-**Coming soon:** ydotool integration (see [MOUSE-CURSOR-METHODS.md](MOUSE-CURSOR-METHODS.md))
+# Start daemon
+sudo ydotoold &
 
-**Workaround:** Use keyboard navigation:
-- Tab/Shift+Tab - Switch focus
-- Arrow keys - Navigate
-- Enter/Space - Activate
+# Verify
+which ydotool
+```
+
+**If ydotool not available:**
+- Mouse won't work, but keyboard still works
+- Use Tab/arrows/Enter to navigate
+- See [MOUSE-CURSOR-METHODS.md](MOUSE-CURSOR-METHODS.md) for alternatives
+
+**Mouse feels laggy?**
+- Normal! ydotool has ~1ms overhead per event
+- Still usable for remote administration
+- Future: Direct protocol integration for lower latency
 
 ---
 

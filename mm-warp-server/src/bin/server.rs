@@ -65,7 +65,12 @@ async fn main() -> Result<()> {
                             InputEvent::KeyRelease { key } => {
                                 let _ = injector.inject_key(key, false);
                             }
-                            _ => {} // Mouse events not implemented yet
+                            InputEvent::MouseMove { x, y } => {
+                                let _ = injector.inject_mouse_move(x, y);
+                            }
+                            InputEvent::MouseButton { button, pressed } => {
+                                let _ = injector.inject_mouse_button(button, pressed);
+                            }
                         }
                     }
                 }
