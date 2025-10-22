@@ -295,12 +295,22 @@ impl Dispatch<wl_output::WlOutput, ()> for CaptureState {
         if let wl_output::Event::Geometry { .. } = event {
             // Geometry gives physical info, we want logical
         }
-        if let wl_output::Event::Mode { width, height, refresh, .. } = event {
+        if let wl_output::Event::Mode { flags, width, height, refresh } = event {
+            use wayland_client::WEnum;
             let refresh_hz = (refresh / 1000) as u32; // mHz to Hz
-            tracing::info!("Output mode: {}x{} @ {} Hz", width, height, refresh_hz);
-            state.logical_width = Some(width);
-            state.logical_height = Some(height);
-            state.refresh_rate = Some(refresh_hz);
+
+            // Only use the CURRENT mode (the one actually active)
+            let is_current = match flags {
+                WEnum::Value(f) => f.contains(wl_output::Mode::Current),
+                WEnum::Unknown(_) => false,
+            };
+
+            if is_current {
+                state.logical_width = Some(width);
+                state.logical_height = Some(height);
+                state.refresh_rate = Some(refresh_hz);
+                tracing::info!("Using current output mode: {}x{} @ {} Hz", width, height, refresh_hz);
+            }
         }
     }
 }
