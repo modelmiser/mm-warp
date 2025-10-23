@@ -25,6 +25,8 @@ pub struct WaylandDisplay {
     buffer_height: u32,
     pending_events: Arc<Mutex<Vec<crate::InputEvent>>>,
     event_queue: wayland_client::EventQueue<State>,
+    _keyboard: wl_keyboard::WlKeyboard, // Keep alive to receive events!
+    _pointer: wl_pointer::WlPointer,   // Keep alive to receive events!
 }
 
 // State for input event collection
@@ -167,9 +169,9 @@ impl WaylandDisplay {
             .bind(&qh, 1..=1, ())
             .context("wl_seat not available")?;
 
-        // Get keyboard and pointer from seat
-        let _keyboard = seat.get_keyboard(&qh, ());
-        let _pointer = seat.get_pointer(&qh, ());
+        // Get keyboard and pointer from seat (must keep alive!)
+        let keyboard = seat.get_keyboard(&qh, ());
+        let pointer = seat.get_pointer(&qh, ());
 
         // Create surface and make it a window
         let surface = compositor.create_surface(&qh, ());
@@ -234,6 +236,8 @@ impl WaylandDisplay {
             buffer_height: height,
             pending_events: pending_events.clone(),
             event_queue,
+            _keyboard: keyboard,
+            _pointer: pointer,
         })
     }
 

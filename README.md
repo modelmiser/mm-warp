@@ -112,9 +112,17 @@ sudo systemctl enable --now ydotool
 
 **What you'll see:**
 - Client window shows your COSMIC desktop at 4K
-- Server prints stats: `FPS: 18.2 | Bitrate: 14.23 Mbps`
-- **Focus the client window and type** - your keystrokes appear on the server!
-- **Move your mouse in the client window** - cursor moves on server (requires ydotool)
+- Server prints stats: `[SERVER] FPS: 18.2 (limit: 60) | Bitrate: 14.23 Mbps`
+- Client prints stats: `[CLIENT] FPS: 18.0 | Bitrate: 14.21 Mbps`
+
+**For remote control:**
+- **Focus the client window and type** - keystrokes appear on server
+- **Move mouse in client window** - cursor moves on server (requires ydotool)
+
+**Important: Local vs Remote Testing**
+- **Remote** (different machines): Works as expected - client controls server
+- **Local** (same machine): Input is global (goes to focused window on server, not captured desktop)
+- This is a Wayland architecture limitation - see [PIPEWIRE-INPUT-PROPOSAL.md](PIPEWIRE-INPUT-PROPOSAL.md) for details
 
 ## Features
 
