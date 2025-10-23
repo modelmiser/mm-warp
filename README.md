@@ -29,9 +29,9 @@ A modern remote desktop solution built on Wayland protocols, QUIC networking, an
 - ✅ Native Wayland (uses compositor protocols directly)
 - ✅ Modern stack (Rust, QUIC, H.264)
 - ✅ Open source (MIT license)
-- ✅ Honest about limitations (see [PIPEWIRE-INPUT-PROPOSAL.md](PIPEWIRE-INPUT-PROPOSAL.md))
+- ✅ Honest about limitations (see [WHY-COSMIC-NEEDS-REMOTEDESKTOP-PORTAL.md](WHY-COSMIC-NEEDS-REMOTEDESKTOP-PORTAL.md))
 
-**Note:** Input injection uses kernel-level workarounds (ydotool) because Wayland has no standard. We've proposed a proper solution - see the proposal document.
+**Note:** Input injection currently uses ydotool (kernel workaround) because COSMIC hasn't implemented the RemoteDesktop portal yet. See [WHY-COSMIC-NEEDS-REMOTEDESKTOP-PORTAL.md](WHY-COSMIC-NEEDS-REMOTEDESKTOP-PORTAL.md) for details and [issue #23](https://github.com/pop-os/xdg-desktop-portal-cosmic/issues/23).
 
 ---
 
@@ -126,7 +126,7 @@ sudo systemctl enable --now ydotool
 **Important: Local vs Remote Testing**
 - **Remote** (different machines): Works as expected - client controls server
 - **Local** (same machine): Input is global (goes to focused window on server, not captured desktop)
-- This is a Wayland architecture limitation - see [PIPEWIRE-INPUT-PROPOSAL.md](PIPEWIRE-INPUT-PROPOSAL.md) for details
+- This is a limitation of ydotool (kernel-level injection). Proper solution: RemoteDesktop portal - see [WHY-COSMIC-NEEDS-REMOTEDESKTOP-PORTAL.md](WHY-COSMIC-NEEDS-REMOTEDESKTOP-PORTAL.md)
 
 ## Features
 
@@ -301,5 +301,5 @@ which ydotool
 
 ## Documentation
 
-- [PIPEWIRE-INPUT-PROPOSAL.md](PIPEWIRE-INPUT-PROPOSAL.md) - Proposal for proper Wayland remote desktop input
+- [WHY-COSMIC-NEEDS-REMOTEDESKTOP-PORTAL.md](WHY-COSMIC-NEEDS-REMOTEDESKTOP-PORTAL.md) - Why we need RemoteDesktop portal (issue #23)
 - [MOUSE-CURSOR-METHODS.md](MOUSE-CURSOR-METHODS.md) - Current mouse injection methods and trade-offs
