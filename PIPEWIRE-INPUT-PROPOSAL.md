@@ -213,7 +213,7 @@ void InjectPointerButton(
 
 ## Reference Implementation
 
-**mm-warp** (this project) proves the need:
+**[mm-warp](https://github.com/modelmiser/mm-warp)** (this project) proves the need:
 
 **What works:**
 - ✅ 4K screen capture via `ext-image-copy-capture-v1` (COSMIC)
@@ -626,7 +626,7 @@ InjectTouch(session_handle, id, x, y, state)
 ## Contact
 
 **Proposal Author:** ModelMiser
-**Reference Implementation:** mm-warp (https://github.com/[...]/mm-warp)
+**Reference Implementation:** [mm-warp](https://github.com/modelmiser/mm-warp)
 **Target Steward:** System76/COSMIC team
 **Upstream Target:** Pipewire project, freedesktop.org
 
