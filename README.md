@@ -28,7 +28,7 @@ A modern remote desktop solution built on Wayland protocols, QUIC networking, an
 **mm-warp is:**
 - ✅ Native Wayland (uses compositor protocols directly)
 - ✅ Modern stack (Rust, QUIC, H.264)
-- ✅ Open source (MIT license)
+- ✅ Open source (GPL-3 license - COSMIC ecosystem compatible)
 - ✅ Honest about limitations (see [WHY-COSMIC-NEEDS-REMOTEDESKTOP-PORTAL.md](WHY-COSMIC-NEEDS-REMOTEDESKTOP-PORTAL.md))
 
 **Note:** Input injection currently uses ydotool (kernel workaround) because COSMIC hasn't implemented the RemoteDesktop portal yet. See [WHY-COSMIC-NEEDS-REMOTEDESKTOP-PORTAL.md](WHY-COSMIC-NEEDS-REMOTEDESKTOP-PORTAL.md) for details and [issue #23](https://github.com/pop-os/xdg-desktop-portal-cosmic/issues/23).
