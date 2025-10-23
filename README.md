@@ -301,6 +301,5 @@ which ydotool
 
 ## Documentation
 
-- [MOUSE-CURSOR-METHODS.md](MOUSE-CURSOR-METHODS.md) - Mouse injection research & implementation plan
-- [INPUT-EVENTS-NEXT.md](INPUT-EVENTS-NEXT.md) - Input pipeline implementation notes
-- [SESSION-COMPLETE-2025-10-21.md](SESSION-COMPLETE-2025-10-21.md) - Complete development log
+- [PIPEWIRE-INPUT-PROPOSAL.md](PIPEWIRE-INPUT-PROPOSAL.md) - Proposal for proper Wayland remote desktop input
+- [MOUSE-CURSOR-METHODS.md](MOUSE-CURSOR-METHODS.md) - Current mouse injection methods and trade-offs
