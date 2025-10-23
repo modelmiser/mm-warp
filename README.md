@@ -120,13 +120,26 @@ sudo systemctl enable --now ydotool
 - Client prints stats: `[CLIENT] FPS: 18.0 | Bitrate: 14.21 Mbps`
 
 **For remote control:**
-- **Focus the client window and type** - keystrokes appear on server
-- **Move mouse in client window** - cursor moves on server (requires ydotool)
+- **Focus the client window and type** - keystrokes appear on server machine
+- **Move mouse in client window** - cursor moves on server machine (requires ydotool)
 
-**Important: Local vs Remote Testing**
-- **Remote** (different machines): Works as expected - client controls server
-- **Local** (same machine): Input is global (goes to focused window on server, not captured desktop)
-- This is a limitation of ydotool (kernel-level injection). Proper solution: RemoteDesktop portal - see [WHY-COSMIC-NEEDS-REMOTEDESKTOP-PORTAL.md](WHY-COSMIC-NEEDS-REMOTEDESKTOP-PORTAL.md)
+**IMPORTANT: How Input Injection Works**
+
+**✅ For actual remote desktop (different machines):**
+- Client machine → Type in client window
+- Server machine → Input appears in focused applications
+- **This works perfectly!** (Tested and verified)
+
+**⚠️ For local testing (same machine):**
+- Input injection is global (uinput + ydotool inject system-wide)
+- Goes to whatever window is focused (not specific to captured desktop)
+- Confusing for testing, but correct behavior for remote access
+
+**Why it's this way:**
+- uinput/ydotool inject at kernel level (global, not per-session)
+- Wayland compositors don't support session-bound input injection yet
+- This is a Wayland ecosystem limitation, not mm-warp bug
+- Proper solution: RemoteDesktop portal - see [WHY-COSMIC-NEEDS-REMOTEDESKTOP-PORTAL.md](WHY-COSMIC-NEEDS-REMOTEDESKTOP-PORTAL.md)
 
 ## Features
 

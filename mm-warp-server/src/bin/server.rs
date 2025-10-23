@@ -59,27 +59,44 @@ async fn main() -> Result<()> {
             }
         };
 
+        eprintln!("DEBUG: Input receiver task starting, waiting for datagrams...");
+
         loop {
             match connection_clone.read_datagram().await {
                 Ok(bytes) => {
+                    eprintln!("DEBUG: Received {} bytes", bytes.len());
                     if let Ok(event) = InputEvent::from_bytes(&bytes) {
+                        eprintln!("DEBUG: Decoded event: {:?}", event);
                         match event {
                             InputEvent::KeyPress { key } => {
-                                let _ = injector.inject_key(key, true);
+                                eprintln!("DEBUG: Injecting KeyPress({})", key);
+                                if let Err(e) = injector.inject_key(key, true) {
+                                    eprintln!("ERROR: inject_key failed: {}", e);
+                                }
                             }
                             InputEvent::KeyRelease { key } => {
-                                let _ = injector.inject_key(key, false);
+                                eprintln!("DEBUG: Injecting KeyRelease({})", key);
+                                if let Err(e) = injector.inject_key(key, false) {
+                                    eprintln!("ERROR: inject_key failed: {}", e);
+                                }
                             }
                             InputEvent::MouseMove { x, y } => {
+                                eprintln!("DEBUG: Injecting MouseMove({}, {})", x, y);
                                 let _ = injector.inject_mouse_move(x, y);
                             }
                             InputEvent::MouseButton { button, pressed } => {
+                                eprintln!("DEBUG: Injecting MouseButton({}, {})", button, pressed);
                                 let _ = injector.inject_mouse_button(button, pressed);
                             }
                         }
+                    } else {
+                        eprintln!("DEBUG: Failed to decode datagram");
                     }
                 }
-                Err(_) => break, // Connection closed
+                Err(e) => {
+                    eprintln!("DEBUG: read_datagram error: {}", e);
+                    break;
+                }
             }
         }
         println!("Input receiver task ended");
