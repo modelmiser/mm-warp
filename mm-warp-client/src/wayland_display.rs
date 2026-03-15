@@ -244,9 +244,23 @@ impl WaylandDisplay {
             anyhow::bail!("Frame size mismatch: expected {}, got {}", size, rgba_data.len());
         }
 
-        let idx = self.current_buf;
+        // Dispatch pending Wayland events (processes wl_buffer.release from previous frame)
+        let _ = self.event_queue.dispatch_pending(&mut self.state);
 
-        // Write RGBA data directly to the current buffer's mmap (Abgr8888 = RGBA on LE)
+        let mut idx = self.current_buf;
+
+        // Check if the target buffer has been released by the compositor.
+        // If not, try the other buffer. If neither is free, proceed anyway
+        // (same behavior as single-buffering — compositor is slow).
+        if !self.buffer_released[idx].load(Ordering::Acquire) {
+            let other = 1 - idx;
+            if self.buffer_released[other].load(Ordering::Acquire) {
+                idx = other;
+            }
+            // else: both in use, write to current anyway (tearing possible under load)
+        }
+
+        // Write RGBA data directly to the selected buffer's mmap (Abgr8888 = RGBA on LE)
         self.mmaps[idx].as_mut()[..size].copy_from_slice(rgba_data);
 
         // Attach and commit

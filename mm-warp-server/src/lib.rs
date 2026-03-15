@@ -228,13 +228,25 @@ fn load_or_generate_cert() -> Result<(CertificateDer<'static>, PrivateKeyDer<'st
         let key_der_bytes = cert.key_pair.serialize_der();
         let fingerprint = cert_fingerprint(&cert_der_bytes);
 
-        // Persist to disk
+        // Persist to disk with restrictive permissions
         std::fs::create_dir_all(&dir)
             .context("Failed to create config directory")?;
+        // Set config dir to owner-only access
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700))?;
+        }
         std::fs::write(&cert_path, &cert_der_bytes)
             .context("Failed to write server certificate")?;
         std::fs::write(&key_path, &key_der_bytes)
             .context("Failed to write server private key")?;
+        // Private key must not be world-readable
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&key_path, std::fs::Permissions::from_mode(0o600))?;
+        }
 
         tracing::info!("Generated new certificate, saved to {}", dir.display());
 

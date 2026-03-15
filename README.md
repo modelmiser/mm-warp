@@ -11,7 +11,7 @@ A modern remote desktop solution built on Wayland protocols, QUIC networking, an
 - 🎬 **H.264 streaming** with adaptive bitrate (11-35 Mbps)
 - ⌨️ **Full keyboard control** (Wayland capture + uinput injection)
 - 🖱️ **Mouse control** (pure evdev via uinput — no external tools needed)
-- 🔒 **QUIC encryption** (TLS-encrypted; note: certificate verification is disabled for self-signed dev certs)
+- 🔒 **QUIC encryption** with TOFU cert pinning (SSH-style: trust on first connect, verify on subsequent)
 - 🔄 **Robust reconnection** (server runs continuously)
 - 📊 **Real-time stats** (FPS, bitrate, frame size)
 
@@ -90,10 +90,13 @@ See [Troubleshooting](#troubleshooting) below for details.
 
 **Terminal 2 (Client):**
 ```bash
-# Connect (--insecure required until TOFU cert pinning is implemented):
-./target/release/mm-warp-client --insecure
+# Connect (TOFU: trusts server cert on first connect, verifies on subsequent):
+./target/release/mm-warp-client
 
 # Connect to remote server:
+./target/release/mm-warp-client --server 192.168.1.100:4433
+
+# Skip cert verification (insecure — use only for testing):
 ./target/release/mm-warp-client --insecure --server 192.168.1.100:4433
 ```
 
@@ -291,4 +294,4 @@ ls -l /dev/uinput
 
 - **RemoteDesktop portal**: COSMIC hasn't implemented the RemoteDesktop portal yet ([pop-os/xdg-desktop-portal-cosmic#23](https://github.com/pop-os/xdg-desktop-portal-cosmic/issues/23)). Input injection uses uinput (kernel-level virtual devices) as a workaround. No external tools are needed.
 - **Input injection**: Both keyboard and mouse use pure evdev via uinput. See [Setup uinput Access](#2-setup-uinput-access-one-time) for permissions setup.
-- **Encryption caveat**: QUIC transport is TLS-encrypted, but certificate verification is currently disabled (`SkipVerification` in client) to accept the server's self-signed cert. This means the connection is encrypted but not authenticated — a production deployment should use proper certificate verification or a trust-on-first-use scheme.
+- **Security model**: QUIC transport is TLS-encrypted with TOFU (trust on first use) certificate pinning. The server generates a persistent self-signed cert on first run (`~/.config/mm-warp/server.crt.der`). The client saves the server's fingerprint on first connection (`~/.config/mm-warp/known_hosts`) and verifies it on subsequent connections — like SSH. Use `--insecure` to skip verification (testing only). **Note:** There is no client authentication yet — anyone who can reach the server port can connect.

@@ -73,7 +73,9 @@ impl QuicClient {
                 .context("Failed to create QUIC config")?
         ));
 
-        let connection = self.endpoint.connect_with(client_config, server_addr, "localhost")
+        // Use the server address as SNI so TOFU known_hosts keys are per-server
+        let sni = server_addr.ip().to_string();
+        let connection = self.endpoint.connect_with(client_config, server_addr, &sni)
             .context("Failed to initiate connection")?
             .await
             .context("Failed to complete handshake")?;
@@ -259,7 +261,12 @@ impl rustls::client::danger::ServerCertVerifier for TofuVerifier {
         _now: rustls::pki_types::UnixTime,
     ) -> Result<rustls::client::danger::ServerCertVerified, rustls::Error> {
         let fingerprint = cert_fingerprint(end_entity.as_ref());
-        let host = format!("{:?}", server_name);
+        // Extract hostname/IP as a plain string for known_hosts key
+        let host = match server_name.to_owned() {
+            rustls::pki_types::ServerName::DnsName(name) => name.as_ref().to_string(),
+            rustls::pki_types::ServerName::IpAddress(addr) => format!("{:?}", addr),
+            _ => format!("{:?}", server_name),
+        };
 
         match self.lookup(&host) {
             Some(known_fp) if known_fp == fingerprint => {
