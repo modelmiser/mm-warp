@@ -30,7 +30,8 @@ fn make_frame(width: u32, height: u32, brightness: u8, pts: i64) -> ffmpeg_next:
     frame.set_width(width);
     frame.set_height(height);
     frame.set_format(ffmpeg_next::format::Pixel::YUV420P);
-    unsafe { ffmpeg_next::sys::av_frame_get_buffer(frame.as_mut_ptr(), 0); }
+    let ret = unsafe { ffmpeg_next::sys::av_frame_get_buffer(frame.as_mut_ptr(), 0) };
+    assert!(ret >= 0, "av_frame_get_buffer failed: error code {}", ret);
     for b in frame.data_mut(0) { *b = brightness; }
     for b in frame.data_mut(1) { *b = 128; }
     for b in frame.data_mut(2) { *b = 128; }

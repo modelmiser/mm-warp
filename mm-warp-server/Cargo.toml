@@ -33,3 +33,6 @@ evdev = "0.12"
 # CLI
 clap = { version = "4", features = ["derive"] }
 
+[dev-dependencies]
+mm-warp-client = { path = "../mm-warp-client" }
+

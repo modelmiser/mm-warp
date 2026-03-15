@@ -30,6 +30,7 @@ pub struct WaylandDisplay {
 // State for input event collection
 struct State {
     pending_events: Arc<Mutex<Vec<crate::InputEvent>>>,
+    viewport_scale: u32,
 }
 
 impl Dispatch<wl_registry::WlRegistry, GlobalListContents> for State {
@@ -42,10 +43,14 @@ impl Dispatch<wl_pointer::WlPointer, ()> for State {
     fn event(state: &mut Self, _: &wl_pointer::WlPointer, event: wl_pointer::Event, _: &(), _: &Connection, _: &QueueHandle<Self>) {
         match event {
             wl_pointer::Event::Motion { surface_x, surface_y, .. } => {
+                // Surface coordinates are in viewport (window) space.
+                // Scale by viewport factor to get buffer-space coordinates,
+                // which match the server's screen resolution.
+                let scale = state.viewport_scale as f64;
                 let mut events = state.pending_events.lock().unwrap();
                 events.push(crate::InputEvent::MouseMove {
-                    x: surface_x as i32,
-                    y: surface_y as i32,
+                    x: (surface_x * scale) as i32,
+                    y: (surface_y * scale) as i32,
                 });
             }
             wl_pointer::Event::Button { button, state: btn_state, .. } => {
@@ -117,8 +122,13 @@ impl WaylandDisplay {
 
         let pending_events = Arc::new(Mutex::new(Vec::new()));
 
+        // Viewport maps the full buffer to half-size window.
+        // Pointer events arrive in window coords; scale them back to buffer coords.
+        let viewport_scale = 2u32;
+
         let mut state = State {
             pending_events: pending_events.clone(),
+            viewport_scale,
         };
 
         // Initialize globals
@@ -243,6 +253,7 @@ impl WaylandDisplay {
         // roundtrip() is needed to actually read from socket (dispatch_pending doesn't!)
         let mut state = State {
             pending_events: self.pending_events.clone(),
+            viewport_scale: 2,
         };
         let _ = self.event_queue.roundtrip(&mut state);
 

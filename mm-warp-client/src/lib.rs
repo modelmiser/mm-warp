@@ -11,6 +11,11 @@ pub mod wayland_display;
 pub use mm_warp_common::input_event;
 pub use mm_warp_common::InputEvent;
 
+/// Maximum frame size the client will accept (50 MB).
+/// Rejects absurdly large length fields from a malicious or buggy server
+/// before allocating memory.
+const MAX_FRAME_SIZE: usize = 50 * 1024 * 1024;
+
 /// QUIC client for receiving frames
 pub struct QuicClient {
     endpoint: Endpoint,
@@ -62,6 +67,13 @@ impl QuicClient {
         stream.read_exact(&mut len_bytes).await
             .context("Failed to read frame length")?;
         let len = u32::from_be_bytes(len_bytes) as usize;
+
+        if len > MAX_FRAME_SIZE {
+            anyhow::bail!(
+                "Frame size {} exceeds maximum allowed size ({})",
+                len, MAX_FRAME_SIZE,
+            );
+        }
 
         // Read frame data
         let mut frame = vec![0u8; len];
