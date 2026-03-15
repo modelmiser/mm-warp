@@ -103,7 +103,8 @@ pub fn config_dir() -> std::path::PathBuf {
     std::env::var("XDG_CONFIG_HOME")
         .map(std::path::PathBuf::from)
         .unwrap_or_else(|_| {
-            let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
+            let home = std::env::var("HOME")
+                .expect("Neither XDG_CONFIG_HOME nor HOME is set — cannot determine config directory");
             std::path::PathBuf::from(home).join(".config")
         })
         .join("mm-warp")

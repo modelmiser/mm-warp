@@ -13,7 +13,9 @@ pub use mm_warp_common::input_event;
 pub use mm_warp_common::InputEvent;
 
 /// Maximum frame size the client will accept (50 MB).
-const MAX_FRAME_SIZE: usize = 50 * 1024 * 1024;
+/// Maximum frame size the client will accept (5 MB).
+/// A 4K H.264 keyframe is typically 50-500KB; 5MB is generous headroom.
+const MAX_FRAME_SIZE: usize = 5 * 1024 * 1024;
 
 use mm_warp_common::{config_dir, cert_fingerprint};
 
@@ -370,11 +372,9 @@ impl rustls::client::danger::ServerCertVerifier for SkipVerification {
     }
 
     fn supported_verify_schemes(&self) -> Vec<rustls::SignatureScheme> {
-        vec![
-            rustls::SignatureScheme::RSA_PKCS1_SHA256,
-            rustls::SignatureScheme::ECDSA_NISTP256_SHA256,
-            rustls::SignatureScheme::ED25519,
-        ]
+        rustls::crypto::ring::default_provider()
+            .signature_verification_algorithms
+            .supported_schemes()
     }
 }
 

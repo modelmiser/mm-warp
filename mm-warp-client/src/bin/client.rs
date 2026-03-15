@@ -55,9 +55,7 @@ async fn main() -> Result<()> {
             send.finish()?;
             let resp = recv.read_to_end(64).await?;
             if resp != b"OK" {
-                eprintln!("⚠️  Server rejected PIN — check your --pin value");
-                tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
-                continue;
+                anyhow::bail!("Server rejected PIN — check your --pin value");
             }
             println!("✅ PIN accepted");
         }

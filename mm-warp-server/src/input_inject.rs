@@ -30,10 +30,12 @@ impl InputInjector {
             87..=88 |
             // KEY_RO through KEY_KATAKANAHIRAGANA (89-93) — international keys
             89..=93 |
-            // Keypad enter, right ctrl (96-97)
-            96..=97 |
+            // Keypad enter, right ctrl, keypad slash (96-98)
+            96..=98 |
             // Right alt, home/up/pgup/left/right/end/down/pgdn/ins/del (100-111)
             100..=111 |
+            // Volume mute/down/up (113-115) — standard laptop/multimedia keys
+            113..=115 |
             // Pause (119)
             119 |
             // Left/right meta (125-126)

@@ -296,8 +296,6 @@ impl WaylandDisplay {
         }
 
         let mut events = self.pending_events.lock().unwrap();
-        let result = events.clone();
-        events.clear();
-        result
+        std::mem::take(&mut *events)
     }
 }
