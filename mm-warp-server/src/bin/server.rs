@@ -69,24 +69,35 @@ async fn main() -> Result<()> {
     let mut input_task: Option<JoinHandle<()>> = None;
 
     loop {
-        let connection = match server.accept().await {
-            Ok(conn) => {
-                println!("✅ Client connected from {}", conn.remote_address());
-                keyframe_flag.store(true, Ordering::Release);
-                println!("   Forcing keyframe for new client");
-
-                // Cancel previous input receiver task if still running
+        // Select between accepting a new client and Ctrl+C
+        let connection = tokio::select! {
+            result = server.accept() => {
+                match result {
+                    Ok(conn) => conn,
+                    Err(e) => {
+                        eprintln!("⚠️  Failed to accept client: {}", e);
+                        continue;
+                    }
+                }
+            }
+            _ = tokio::signal::ctrl_c() => {
+                println!("\n✅ Shutting down...");
+                // Abort input task to release virtual devices cleanly
                 if let Some(handle) = input_task.take() {
                     handle.abort();
                 }
-
-                conn
-            }
-            Err(e) => {
-                eprintln!("⚠️  Failed to accept client: {}", e);
-                continue;
+                return Ok(());
             }
         };
+
+        println!("✅ Client connected from {}", connection.remote_address());
+        keyframe_flag.store(true, Ordering::Release);
+        println!("   Forcing keyframe for new client");
+
+        // Cancel previous input receiver task if still running
+        if let Some(handle) = input_task.take() {
+            handle.abort();
+        }
 
         // Send stream metadata to client
         let max_fps = monitor_fps.min(60);

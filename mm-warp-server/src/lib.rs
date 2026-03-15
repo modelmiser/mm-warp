@@ -1,6 +1,7 @@
 use anyhow::{Context, Result};
 use std::net::SocketAddr;
 use std::os::fd::AsFd;
+use std::path::PathBuf;
 use quinn::{Endpoint, ServerConfig};
 use rustls::pki_types::{CertificateDer, PrivateKeyDer};
 use ffmpeg_next::software::scaling::{context::Context as ScaleContext, flag::Flags};
@@ -178,16 +179,78 @@ pub struct QuicServer {
     endpoint: Endpoint,
 }
 
-impl QuicServer {
-    /// Create server listening on given address
-    pub async fn new(addr: SocketAddr) -> Result<Self> {
-        // Generate self-signed cert (for now - real version uses proper certs)
-        let cert = rcgen::generate_simple_self_signed(vec!["localhost".to_string()])
+/// Compute SHA-256 fingerprint of DER bytes, returned as hex string.
+pub fn cert_fingerprint(der: &[u8]) -> String {
+    use sha2::{Sha256, Digest};
+    let hash = Sha256::digest(der);
+    hash.iter().map(|b| format!("{:02x}", b)).collect()
+}
+
+/// Get the mm-warp config directory (~/.config/mm-warp/).
+fn config_dir() -> PathBuf {
+    std::env::var("XDG_CONFIG_HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| {
+            let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
+            PathBuf::from(home).join(".config")
+        })
+        .join("mm-warp")
+}
+
+/// Load existing server cert/key from disk, or generate and persist a new one.
+/// Returns (cert_der, key_der, fingerprint).
+fn load_or_generate_cert() -> Result<(CertificateDer<'static>, PrivateKeyDer<'static>, String)> {
+    let dir = config_dir();
+    let cert_path = dir.join("server.crt.der");
+    let key_path = dir.join("server.key.der");
+
+    if cert_path.exists() && key_path.exists() {
+        let cert_bytes = std::fs::read(&cert_path)
+            .context("Failed to read server certificate")?;
+        let key_bytes = std::fs::read(&key_path)
+            .context("Failed to read server private key")?;
+        let fingerprint = cert_fingerprint(&cert_bytes);
+        let cert_der = CertificateDer::from(cert_bytes);
+        let key_der = PrivateKeyDer::try_from(key_bytes)
+            .map_err(|e| anyhow::anyhow!("Failed to parse private key: {}", e))?;
+        tracing::info!("Loaded existing certificate from {}", cert_path.display());
+        Ok((cert_der, key_der, fingerprint))
+    } else {
+        // Generate new self-signed cert with hostname
+        let hostname = nix::unistd::gethostname()
+            .map(|h| h.to_string_lossy().to_string())
+            .unwrap_or_else(|_| "localhost".to_string());
+        let sans = vec![hostname.clone(), "localhost".to_string()];
+        let cert = rcgen::generate_simple_self_signed(sans)
             .context("Failed to generate certificate")?;
 
-        let cert_der = CertificateDer::from(cert.cert);
-        let key_der = PrivateKeyDer::try_from(cert.key_pair.serialize_der())
+        let cert_der_bytes = cert.cert.der().to_vec();
+        let key_der_bytes = cert.key_pair.serialize_der();
+        let fingerprint = cert_fingerprint(&cert_der_bytes);
+
+        // Persist to disk
+        std::fs::create_dir_all(&dir)
+            .context("Failed to create config directory")?;
+        std::fs::write(&cert_path, &cert_der_bytes)
+            .context("Failed to write server certificate")?;
+        std::fs::write(&key_path, &key_der_bytes)
+            .context("Failed to write server private key")?;
+
+        tracing::info!("Generated new certificate, saved to {}", dir.display());
+
+        let cert_der = CertificateDer::from(cert_der_bytes);
+        let key_der = PrivateKeyDer::try_from(key_der_bytes)
             .map_err(|e| anyhow::anyhow!("Failed to serialize private key: {}", e))?;
+        Ok((cert_der, key_der, fingerprint))
+    }
+}
+
+impl QuicServer {
+    /// Create server listening on given address.
+    /// Loads or generates a persistent TLS certificate.
+    pub async fn new(addr: SocketAddr) -> Result<Self> {
+        let (cert_der, key_der, fingerprint) = load_or_generate_cert()?;
+        println!("   Certificate fingerprint: SHA256:{}", fingerprint);
 
         let server_config = ServerConfig::with_single_cert(vec![cert_der], key_der)
             .context("Failed to create server config")?;
