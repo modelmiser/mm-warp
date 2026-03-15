@@ -42,6 +42,12 @@ pub struct H264Encoder {
     force_keyframe_next: bool,
 }
 
+// SAFETY: H264Encoder wraps ffmpeg contexts that use raw pointers internally.
+// These are safe to move between threads as long as only one thread accesses
+// them at a time. The pipelined server enforces this by transferring exclusive
+// ownership to the encode thread, then back to main when the session ends.
+unsafe impl Send for H264Encoder {}
+
 impl H264Encoder {
     pub fn new(width: u32, height: u32) -> Result<Self> {
         ffmpeg_next::init().context("Failed to initialize ffmpeg")?;
