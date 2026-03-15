@@ -24,8 +24,12 @@ impl InputInjector {
             54..=68 |
             // Numlock through keypad-dot (69-83)
             69..=83 |
+            // KEY_ZENKAKUHANKAKU (85), KEY_102ND (86) — ISO layout extra key
+            85..=86 |
             // F11-F12 (87-88)
             87..=88 |
+            // KEY_RO through KEY_KATAKANAHIRAGANA (89-93) — international keys
+            89..=93 |
             // Keypad enter, right ctrl (96-97)
             96..=97 |
             // Right alt, home/up/pgup/left/right/end/down/pgdn/ins/del (100-111)
@@ -175,5 +179,62 @@ impl InputInjector {
             EvInputEvent::new(EventType::SYNCHRONIZATION, 0, 0),
         ])?;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn safe_key_allows_standard_keyboard() {
+        assert!(InputInjector::is_safe_key(1));   // ESC
+        assert!(InputInjector::is_safe_key(2));   // KEY_1
+        assert!(InputInjector::is_safe_key(16));  // KEY_Q
+        assert!(InputInjector::is_safe_key(30));  // KEY_A
+        assert!(InputInjector::is_safe_key(28));  // KEY_ENTER (in 1-43 range)
+        assert!(InputInjector::is_safe_key(57));  // KEY_SPACE
+        assert!(InputInjector::is_safe_key(56));  // KEY_LEFTALT
+        assert!(InputInjector::is_safe_key(59));  // KEY_F1
+        assert!(InputInjector::is_safe_key(68));  // KEY_F10
+        assert!(InputInjector::is_safe_key(87));  // KEY_F11
+        assert!(InputInjector::is_safe_key(88));  // KEY_F12
+        assert!(InputInjector::is_safe_key(96));  // KEY_KPENTER
+        assert!(InputInjector::is_safe_key(100)); // KEY_RIGHTALT
+        assert!(InputInjector::is_safe_key(103)); // KEY_UP
+        assert!(InputInjector::is_safe_key(108)); // KEY_DOWN
+        assert!(InputInjector::is_safe_key(111)); // KEY_DELETE
+        assert!(InputInjector::is_safe_key(119)); // KEY_PAUSE
+        assert!(InputInjector::is_safe_key(125)); // KEY_LEFTMETA
+        assert!(InputInjector::is_safe_key(126)); // KEY_RIGHTMETA
+    }
+
+    #[test]
+    fn safe_key_blocks_dangerous_keys() {
+        assert!(!InputInjector::is_safe_key(0));   // KEY_RESERVED
+        assert!(!InputInjector::is_safe_key(99));  // KEY_SYSRQ
+        assert!(!InputInjector::is_safe_key(116)); // KEY_POWER
+        assert!(!InputInjector::is_safe_key(142)); // KEY_SLEEP
+        assert!(!InputInjector::is_safe_key(143)); // KEY_WAKEUP
+        assert!(!InputInjector::is_safe_key(152)); // KEY_SCREENLOCK
+        assert!(!InputInjector::is_safe_key(205)); // KEY_SUSPEND
+        assert!(!InputInjector::is_safe_key(238)); // KEY_WLAN
+        assert!(!InputInjector::is_safe_key(247)); // KEY_RFKILL
+        assert!(!InputInjector::is_safe_key(248)); // KEY_MICMUTE
+    }
+
+    #[test]
+    fn safe_key_allows_iso_and_international() {
+        assert!(InputInjector::is_safe_key(85));  // KEY_ZENKAKUHANKAKU
+        assert!(InputInjector::is_safe_key(86));  // KEY_102ND (ISO layout)
+        assert!(InputInjector::is_safe_key(89));  // KEY_RO
+        assert!(InputInjector::is_safe_key(93));  // KEY_KATAKANAHIRAGANA
+    }
+
+    #[test]
+    fn safe_key_allows_extended_function_keys() {
+        assert!(InputInjector::is_safe_key(183)); // KEY_F13
+        assert!(InputInjector::is_safe_key(194)); // KEY_F24
+        assert!(!InputInjector::is_safe_key(195)); // beyond F24
     }
 }

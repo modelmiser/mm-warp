@@ -256,8 +256,12 @@ impl WaylandDisplay {
             let other = 1 - idx;
             if self.buffer_released[other].load(Ordering::Acquire) {
                 idx = other;
+            } else {
+                // Both buffers held by compositor — drop frame to avoid protocol violation.
+                // This is consistent with the server-side frame-dropping strategy.
+                tracing::debug!("Both display buffers busy, dropping frame");
+                return Ok(());
             }
-            // else: both in use, write to current anyway (tearing possible under load)
         }
 
         // Write RGBA data directly to the selected buffer's mmap (Abgr8888 = RGBA on LE)

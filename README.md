@@ -84,8 +84,8 @@ See [Troubleshooting](#troubleshooting) below for details.
 # Local testing (localhost only):
 ./target/release/mm-warp-server
 
-# Remote desktop (listen on all interfaces — ⚠️ no authentication yet):
-./target/release/mm-warp-server --listen 0.0.0.0:4433
+# Remote desktop (listen on all interfaces, PIN required):
+./target/release/mm-warp-server --listen 0.0.0.0:4433 --pin mysecret
 ```
 
 **Terminal 2 (Client):**
@@ -93,8 +93,8 @@ See [Troubleshooting](#troubleshooting) below for details.
 # Connect (TOFU: trusts server cert on first connect, verifies on subsequent):
 ./target/release/mm-warp-client
 
-# Connect to remote server:
-./target/release/mm-warp-client --server 192.168.1.100:4433
+# Connect to remote server (with PIN if server requires it):
+./target/release/mm-warp-client --server 192.168.1.100:4433 --pin mysecret
 
 # Skip cert verification (insecure — use only for testing):
 ./target/release/mm-warp-client --insecure --server 192.168.1.100:4433
@@ -294,4 +294,4 @@ ls -l /dev/uinput
 
 - **RemoteDesktop portal**: COSMIC hasn't implemented the RemoteDesktop portal yet ([pop-os/xdg-desktop-portal-cosmic#23](https://github.com/pop-os/xdg-desktop-portal-cosmic/issues/23)). Input injection uses uinput (kernel-level virtual devices) as a workaround. No external tools are needed.
 - **Input injection**: Both keyboard and mouse use pure evdev via uinput. See [Setup uinput Access](#2-setup-uinput-access-one-time) for permissions setup.
-- **Security model**: QUIC transport is TLS-encrypted with TOFU (trust on first use) certificate pinning. The server generates a persistent self-signed cert on first run (`~/.config/mm-warp/server.crt.der`). The client saves the server's fingerprint on first connection (`~/.config/mm-warp/known_hosts`) and verifies it on subsequent connections — like SSH. Use `--insecure` to skip verification (testing only). **Note:** There is no client authentication yet — anyone who can reach the server port can connect.
+- **Security model**: QUIC transport is TLS-encrypted with TOFU (trust on first use) certificate pinning. The server generates a persistent self-signed cert on first run (`~/.config/mm-warp/server.crt.der`). The client saves the server's fingerprint on first connection (`~/.config/mm-warp/known_hosts`) and verifies it on subsequent connections — like SSH. Use `--insecure` to skip verification (testing only). Use `--pin <SECRET>` on both server and client when listening on non-loopback addresses — clients that don't provide the correct PIN are disconnected after 10 seconds.

@@ -186,12 +186,16 @@ async fn main() -> Result<()> {
                             event_count = 0;
                             rate_window = tokio::time::Instant::now();
                         }
-                        if event_count > 1000 {
-                            continue; // drop excess events
-                        }
-
                         match InputEvent::from_bytes(&bytes) {
                             Ok(event) => {
+                                // Rate limit: drop excess mouse moves/scrolls, but NEVER
+                                // drop key/button events (a dropped KeyRelease = stuck key)
+                                if event_count > 1000 {
+                                    match &event {
+                                        InputEvent::MouseMove { .. } | InputEvent::MouseScroll { .. } => continue,
+                                        _ => {} // always deliver key press/release and button events
+                                    }
+                                }
                                 if let Err(e) = injector.inject(&event, capture_width, capture_height) {
                                     tracing::warn!("Input injection failed: {}", e);
                                 }

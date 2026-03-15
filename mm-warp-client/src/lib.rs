@@ -224,6 +224,16 @@ impl TofuVerifier {
     fn save(&self, host: &str, fingerprint: &str) -> std::io::Result<()> {
         if let Some(parent) = self.known_hosts_path.parent() {
             std::fs::create_dir_all(parent)?;
+            // Restrict config dir to owner-only access
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                let _ = std::fs::set_permissions(parent, std::fs::Permissions::from_mode(0o700));
+            }
+        }
+        // Don't duplicate: if host already exists, skip (user must manually remove old entry)
+        if self.lookup(host).is_some() {
+            return Ok(());
         }
         use std::io::Write;
         let mut file = std::fs::OpenOptions::new()
@@ -231,6 +241,12 @@ impl TofuVerifier {
             .append(true)
             .open(&self.known_hosts_path)?;
         writeln!(file, "{} {}", host, fingerprint)?;
+        // Restrict known_hosts to owner-only access
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let _ = std::fs::set_permissions(&self.known_hosts_path, std::fs::Permissions::from_mode(0o600));
+        }
         Ok(())
     }
 }
@@ -248,7 +264,14 @@ impl rustls::client::danger::ServerCertVerifier for TofuVerifier {
         // Extract hostname/IP as a plain string for known_hosts key
         let host = match server_name.to_owned() {
             rustls::pki_types::ServerName::DnsName(name) => name.as_ref().to_string(),
-            rustls::pki_types::ServerName::IpAddress(addr) => format!("{:?}", addr),
+            rustls::pki_types::ServerName::IpAddress(addr) => {
+                // Convert pki_types IpAddr to std IpAddr for stable Display formatting
+                use rustls::pki_types::IpAddr as PkiIp;
+                match addr {
+                    PkiIp::V4(v4) => std::net::Ipv4Addr::from(v4.as_ref().to_owned()).to_string(),
+                    PkiIp::V6(v6) => std::net::Ipv6Addr::from(v6.as_ref().to_owned()).to_string(),
+                }
+            }
             _ => format!("{:?}", server_name),
         };
 
