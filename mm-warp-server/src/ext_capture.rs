@@ -175,7 +175,22 @@ impl ExtCapture {
             anyhow::bail!("Frame capture failed");
         }
 
-        // Copy from mmap directly (ABGR8888 is already RGBA in little-endian!)
+        // No pixel format conversion needed. From wayland.xml:
+        //
+        //   abgr8888: "32-bit ABGR format, [31:0] A:B:G:R 8:8:8:8 little endian"
+        //
+        // The name describes the 32-bit word layout from MSB to LSB: A=bits[31:24],
+        // B=bits[23:16], G=bits[15:8], R=bits[7:0]. As a 32-bit integer: 0xAABBGGRR.
+        // On little-endian (x86), this integer is stored in memory as bytes:
+        //   [byte0=RR, byte1=GG, byte2=BB, byte3=AA] = RGBA byte order.
+        //
+        // So Abgr8888 in shared memory IS RGBA bytes on little-endian. No swizzle.
+        //
+        // Compare with Argb8888 (used by wlr-screencopy path in lib.rs):
+        //   argb8888 word = 0xAARRGGBB → LE bytes [BB,GG,RR,AA] = BGRA → needs conversion.
+        //
+        // See: wayland.xml wl_shm.format enum, drm_fourcc.h naming convention.
+        // Verified by: cargo run --bin test_pixel_format
         let size = (self.width * self.height * 4) as usize;
         let rgba_buffer = self.mmap.as_ref()[..size].to_vec();
 
