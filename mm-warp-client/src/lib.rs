@@ -132,8 +132,11 @@ impl H264Decoder {
                 rgba_frame.set_width(self.width);
                 rgba_frame.set_height(self.height);
                 rgba_frame.set_format(ffmpeg_next::format::Pixel::RGBA);
-                unsafe {
-                    ffmpeg_next::sys::av_frame_get_buffer(rgba_frame.as_mut_ptr(), 0);
+                let ret = unsafe {
+                    ffmpeg_next::sys::av_frame_get_buffer(rgba_frame.as_mut_ptr(), 0)
+                };
+                if ret < 0 {
+                    anyhow::bail!("av_frame_get_buffer failed for RGBA frame: error code {}", ret);
                 }
 
                 // Convert YUV420P → RGBA using cached swscale context
@@ -144,9 +147,12 @@ impl H264Decoder {
                 let rgba_data = rgba_frame.data(0);
                 Ok(rgba_data.to_vec())
             }
-            Err(_) => {
-                // Decoder buffering, return empty
+            Err(ffmpeg_next::Error::Other { errno: ffmpeg_next::util::error::EAGAIN }) => {
+                // Decoder needs more data before it can output a frame
                 Ok(Vec::new())
+            }
+            Err(e) => {
+                Err(anyhow::anyhow!("Decoder error: {}", e))
             }
         }
     }

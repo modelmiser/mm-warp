@@ -42,9 +42,23 @@ impl InputInjector {
         Ok(Self { keyboard, mouse })
     }
 
+    /// Linux KEY_MAX — keycodes above this are not valid evdev keys.
+    const KEY_MAX: u32 = 767;
+
+    /// Keys that trigger system power state changes. Allowed but logged.
+    const DANGEROUS_KEYS: &[u32] = &[
+        116, // KEY_POWER
+        142, // KEY_SLEEP
+        143, // KEY_WAKEUP
+        205, // KEY_SUSPEND
+    ];
+
     pub fn inject_key(&mut self, key: u32, pressed: bool) -> Result<()> {
-        if key > u16::MAX as u32 {
-            anyhow::bail!("Key code {} out of range (max {})", key, u16::MAX);
+        if key > Self::KEY_MAX {
+            anyhow::bail!("Key code {} out of range (max {})", key, Self::KEY_MAX);
+        }
+        if Self::DANGEROUS_KEYS.contains(&key) {
+            tracing::warn!("Injecting dangerous key code {} (power/sleep related)", key);
         }
         let key_obj = Key::new(key as u16);
         let value = if pressed { 1 } else { 0 };

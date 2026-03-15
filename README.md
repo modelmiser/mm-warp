@@ -10,8 +10,8 @@ A modern remote desktop solution built on Wayland protocols, QUIC networking, an
 - 🖥️ **4K screen capture** at 18-20 FPS on COSMIC
 - 🎬 **H.264 streaming** with adaptive bitrate (11-35 Mbps)
 - ⌨️ **Full keyboard control** (Wayland capture + uinput injection)
-- 🖱️ **Mouse control** (via ydotool - see [transparent duct tape](#3-setup-mouse-control-optional---honest-disclaimer))
-- 🔒 **QUIC encryption** (TLS, secure by default)
+- 🖱️ **Mouse control** (pure evdev via uinput — no external tools needed)
+- 🔒 **QUIC encryption** (TLS-encrypted; note: certificate verification is disabled for self-signed dev certs)
 - 🔄 **Robust reconnection** (server runs continuously)
 - 📊 **Real-time stats** (FPS, bitrate, frame size)
 
@@ -31,7 +31,7 @@ A modern remote desktop solution built on Wayland protocols, QUIC networking, an
 - ✅ Open source (GPL-3 license - COSMIC ecosystem compatible)
 - ✅ Honest about limitations (see [RemoteDesktop portal notes](#documentation))
 
-**Note:** Input injection currently uses ydotool (kernel workaround) because COSMIC hasn't implemented the RemoteDesktop portal yet. See [pop-os/xdg-desktop-portal-cosmic#23](https://github.com/pop-os/xdg-desktop-portal-cosmic/issues/23).
+**Note:** Input injection uses uinput (kernel-level virtual devices) because COSMIC hasn't implemented the RemoteDesktop portal yet. See [pop-os/xdg-desktop-portal-cosmic#23](https://github.com/pop-os/xdg-desktop-portal-cosmic/issues/23). No external tools are required.
 
 ---
 
@@ -59,48 +59,7 @@ sudo -E ./target/release/server
 
 See [Troubleshooting](#troubleshooting) below for details.
 
-### 3. Setup Mouse Control (Optional - Honest Disclaimer)
-
-**mm-warp uses ydotool for mouse injection. This is duct tape, and we're transparent about it.**
-
-**Why duct tape?**
-- Wayland has **no standard input injection protocol** (by design - security)
-- Compositor-specific protocols exist (wlr-virtual-pointer) but only work on Sway/Hyprland
-- COSMIC, GNOME, and KDE don't support those protocols
-- ydotool is a **pragmatic workaround** that works everywhere
-
-**Trade-offs:**
-- ✅ Works on all compositors (COSMIC, Sway, Hyprland, GNOME, KDE)
-- ✅ Battle-tested (used by automation tools for years)
-- ⚠️  External dependency (requires install + daemon)
-- ⚠️  ~1ms overhead per mouse event (barely noticeable)
-
-**We know this isn't elegant.** If Wayland standardizes input injection, we'll migrate immediately. For now, this works.
-
-**Install ydotool:**
-```bash
-# Ubuntu/Debian
-sudo apt install ydotool
-
-# Arch Linux
-sudo pacman -S ydotool
-
-# From source (if not in repos)
-# https://github.com/ReimuNotMoe/ydotool
-```
-
-**Start the daemon:**
-```bash
-# Option 1: Manual (for testing)
-sudo ydotoold &
-
-# Option 2: Systemd service (automatic on boot)
-sudo systemctl enable --now ydotool
-```
-
-**Without ydotool:** Keyboard control still works perfectly! Many workflows (terminals, vim, tmux) are keyboard-native anyway. Use Tab/arrows/Enter to navigate.
-
-### 4. Run
+### 3. Run
 
 **Terminal 1 (Server):**
 ```bash
@@ -121,7 +80,7 @@ sudo systemctl enable --now ydotool
 
 **For remote control:**
 - **Focus the client window and type** - keystrokes appear on server machine
-- **Move mouse in client window** - cursor moves on server machine (requires ydotool)
+- **Move mouse in client window** - cursor moves on server machine
 
 **IMPORTANT: How Input Injection Works**
 
@@ -131,15 +90,15 @@ sudo systemctl enable --now ydotool
 - **This works perfectly!** (Tested and verified)
 
 **⚠️ For local testing (same machine):**
-- Input injection is global (uinput + ydotool inject system-wide)
+- Input injection is global (uinput injects system-wide)
 - Goes to whatever window is focused (not specific to captured desktop)
 - Confusing for testing, but correct behavior for remote access
 
 **Why it's this way:**
-- uinput/ydotool inject at kernel level (global, not per-session)
+- uinput injects at kernel level (global, not per-session)
 - Wayland compositors don't support session-bound input injection yet
 - This is a Wayland ecosystem limitation, not mm-warp bug
-- Proper solution: RemoteDesktop portal - see [WHY-COSMIC-NEEDS-REMOTEDESKTOP-PORTAL.md](WHY-COSMIC-NEEDS-REMOTEDESKTOP-PORTAL.md)
+- Proper solution: RemoteDesktop portal (COSMIC hasn't implemented it yet — see [pop-os/xdg-desktop-portal-cosmic#23](https://github.com/pop-os/xdg-desktop-portal-cosmic/issues/23))
 
 ## Features
 
@@ -148,7 +107,7 @@ sudo systemctl enable --now ydotool
 - **4K Screen Capture** (18-20 FPS on COSMIC)
 - **H.264 Streaming** (11-35 Mbps adaptive bitrate)
 - **Full Keyboard Control** (real Wayland keyboard capture)
-- **Full Mouse Control** (movement + clicks via ydotool)
+- **Full Mouse Control** (movement + clicks via uinput)
 - **Cursor Visible** (painted in stream)
 - **Reconnection** (server accepts new clients)
 - **Adaptive FPS** (5 FPS idle, 20 FPS on motion)
@@ -288,31 +247,22 @@ FPS: 18.2 (target: 20) | Bitrate: 14.23 Mbps | Avg: 124KB/frame
 
 ### Mouse not working
 
-**Did you install ydotool?**
+**Check uinput access:**
 ```bash
-# Install
-sudo apt install ydotool
+# Check if you're in uinput group (after logout/login)
+groups | grep uinput
 
-# Start daemon
-sudo ydotoold &
-
-# Verify
-which ydotool
+# Check /dev/uinput permissions
+ls -l /dev/uinput
+# Should show: crw-rw---- 1 root uinput ... /dev/uinput
 ```
 
-**If ydotool not available:**
-- Mouse won't work, but keyboard still works
-- Use Tab/arrows/Enter to navigate
-- See [MOUSE-CURSOR-METHODS.md](MOUSE-CURSOR-METHODS.md) for alternatives
-
-**Mouse feels laggy?**
-- Normal! ydotool has ~1ms overhead per event
-- Still usable for remote administration
-- Future: Direct protocol integration for lower latency
+**If permission denied:** Run `./setup-uinput.sh` or use `sudo -E` (see [Setup uinput Access](#2-setup-uinput-access-one-time) above).
 
 ---
 
 ## Documentation
 
-- **RemoteDesktop portal**: COSMIC hasn't implemented the RemoteDesktop portal yet ([pop-os/xdg-desktop-portal-cosmic#23](https://github.com/pop-os/xdg-desktop-portal-cosmic/issues/23)). Input injection uses ydotool as a workaround.
-- **Mouse injection**: See [Setup Mouse Control](#3-setup-mouse-control-optional---honest-disclaimer) for trade-offs.
+- **RemoteDesktop portal**: COSMIC hasn't implemented the RemoteDesktop portal yet ([pop-os/xdg-desktop-portal-cosmic#23](https://github.com/pop-os/xdg-desktop-portal-cosmic/issues/23)). Input injection uses uinput (kernel-level virtual devices) as a workaround. No external tools are needed.
+- **Input injection**: Both keyboard and mouse use pure evdev via uinput. See [Setup uinput Access](#2-setup-uinput-access-one-time) for permissions setup.
+- **Encryption caveat**: QUIC transport is TLS-encrypted, but certificate verification is currently disabled (`SkipVerification` in client) to accept the server's self-signed cert. This means the connection is encrypted but not authenticated — a production deployment should use proper certificate verification or a trust-on-first-use scheme.

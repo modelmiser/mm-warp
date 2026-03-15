@@ -88,3 +88,201 @@ impl InputEvent {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // --- Round-trip tests for all 4 event types ---
+
+    #[test]
+    fn round_trip_key_press() {
+        let event = InputEvent::KeyPress { key: 42 };
+        let bytes = event.to_bytes();
+        let decoded = InputEvent::from_bytes(&bytes).unwrap();
+        match decoded {
+            InputEvent::KeyPress { key } => assert_eq!(key, 42),
+            other => panic!("Expected KeyPress, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn round_trip_key_release() {
+        let event = InputEvent::KeyRelease { key: 100 };
+        let bytes = event.to_bytes();
+        let decoded = InputEvent::from_bytes(&bytes).unwrap();
+        match decoded {
+            InputEvent::KeyRelease { key } => assert_eq!(key, 100),
+            other => panic!("Expected KeyRelease, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn round_trip_mouse_move() {
+        let event = InputEvent::MouseMove { x: 1920, y: 1080 };
+        let bytes = event.to_bytes();
+        let decoded = InputEvent::from_bytes(&bytes).unwrap();
+        match decoded {
+            InputEvent::MouseMove { x, y } => {
+                assert_eq!(x, 1920);
+                assert_eq!(y, 1080);
+            }
+            other => panic!("Expected MouseMove, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn round_trip_mouse_button() {
+        let event = InputEvent::MouseButton { button: 272, pressed: true };
+        let bytes = event.to_bytes();
+        let decoded = InputEvent::from_bytes(&bytes).unwrap();
+        match decoded {
+            InputEvent::MouseButton { button, pressed } => {
+                assert_eq!(button, 272);
+                assert!(pressed);
+            }
+            other => panic!("Expected MouseButton, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn round_trip_mouse_button_released() {
+        let event = InputEvent::MouseButton { button: 273, pressed: false };
+        let bytes = event.to_bytes();
+        let decoded = InputEvent::from_bytes(&bytes).unwrap();
+        match decoded {
+            InputEvent::MouseButton { button, pressed } => {
+                assert_eq!(button, 273);
+                assert!(!pressed);
+            }
+            other => panic!("Expected MouseButton, got {:?}", other),
+        }
+    }
+
+    // --- Malformed input tests ---
+
+    #[test]
+    fn from_bytes_empty_input() {
+        let result = InputEvent::from_bytes(&[]);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("Empty"));
+    }
+
+    #[test]
+    fn from_bytes_invalid_type_code() {
+        let result = InputEvent::from_bytes(&[0]);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("Unknown"));
+    }
+
+    #[test]
+    fn from_bytes_invalid_type_code_high() {
+        let result = InputEvent::from_bytes(&[255]);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn from_bytes_truncated_key_press() {
+        // Type 1 (KeyPress) needs 5 bytes total, give it 3
+        let result = InputEvent::from_bytes(&[1, 0, 0]);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("too short"));
+    }
+
+    #[test]
+    fn from_bytes_truncated_key_release() {
+        let result = InputEvent::from_bytes(&[2, 0]);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn from_bytes_truncated_mouse_move() {
+        // Type 3 (MouseMove) needs 9 bytes total, give it 5
+        let result = InputEvent::from_bytes(&[3, 0, 0, 0, 1]);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("too short"));
+    }
+
+    #[test]
+    fn from_bytes_truncated_mouse_button() {
+        // Type 4 (MouseButton) needs 6 bytes total, give it 4
+        let result = InputEvent::from_bytes(&[4, 0, 0, 0]);
+        assert!(result.is_err());
+    }
+
+    // --- Boundary value tests ---
+
+    #[test]
+    fn round_trip_key_zero() {
+        let event = InputEvent::KeyPress { key: 0 };
+        let bytes = event.to_bytes();
+        let decoded = InputEvent::from_bytes(&bytes).unwrap();
+        match decoded {
+            InputEvent::KeyPress { key } => assert_eq!(key, 0),
+            other => panic!("Expected KeyPress, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn round_trip_key_max() {
+        let event = InputEvent::KeyPress { key: u32::MAX };
+        let bytes = event.to_bytes();
+        let decoded = InputEvent::from_bytes(&bytes).unwrap();
+        match decoded {
+            InputEvent::KeyPress { key } => assert_eq!(key, u32::MAX),
+            other => panic!("Expected KeyPress, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn round_trip_mouse_move_origin() {
+        let event = InputEvent::MouseMove { x: 0, y: 0 };
+        let bytes = event.to_bytes();
+        let decoded = InputEvent::from_bytes(&bytes).unwrap();
+        match decoded {
+            InputEvent::MouseMove { x, y } => {
+                assert_eq!(x, 0);
+                assert_eq!(y, 0);
+            }
+            other => panic!("Expected MouseMove, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn round_trip_mouse_move_negative() {
+        let event = InputEvent::MouseMove { x: i32::MIN, y: i32::MAX };
+        let bytes = event.to_bytes();
+        let decoded = InputEvent::from_bytes(&bytes).unwrap();
+        match decoded {
+            InputEvent::MouseMove { x, y } => {
+                assert_eq!(x, i32::MIN);
+                assert_eq!(y, i32::MAX);
+            }
+            other => panic!("Expected MouseMove, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn round_trip_button_max() {
+        let event = InputEvent::MouseButton { button: u32::MAX, pressed: true };
+        let bytes = event.to_bytes();
+        let decoded = InputEvent::from_bytes(&bytes).unwrap();
+        match decoded {
+            InputEvent::MouseButton { button, pressed } => {
+                assert_eq!(button, u32::MAX);
+                assert!(pressed);
+            }
+            other => panic!("Expected MouseButton, got {:?}", other),
+        }
+    }
+
+    // --- Byte-level size assertions ---
+
+    #[test]
+    fn to_bytes_sizes() {
+        assert_eq!(InputEvent::KeyPress { key: 0 }.to_bytes().len(), 5);
+        assert_eq!(InputEvent::KeyRelease { key: 0 }.to_bytes().len(), 5);
+        assert_eq!(InputEvent::MouseMove { x: 0, y: 0 }.to_bytes().len(), 9);
+        assert_eq!(InputEvent::MouseButton { button: 0, pressed: false }.to_bytes().len(), 6);
+    }
+}

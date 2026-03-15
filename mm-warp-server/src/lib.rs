@@ -110,8 +110,11 @@ impl H264Encoder {
         rgba_src_frame.set_width(self.width);
         rgba_src_frame.set_height(self.height);
         rgba_src_frame.set_format(ffmpeg_next::format::Pixel::RGBA);
-        unsafe {
-            ffmpeg_next::sys::av_frame_get_buffer(rgba_src_frame.as_mut_ptr(), 0);
+        let ret = unsafe {
+            ffmpeg_next::sys::av_frame_get_buffer(rgba_src_frame.as_mut_ptr(), 0)
+        };
+        if ret < 0 {
+            anyhow::bail!("av_frame_get_buffer failed for RGBA frame: error code {}", ret);
         }
 
         // Copy RGBA data to source frame
@@ -122,8 +125,11 @@ impl H264Encoder {
         frame.set_width(self.width);
         frame.set_height(self.height);
         frame.set_format(ffmpeg_next::format::Pixel::YUV420P);
-        unsafe {
-            ffmpeg_next::sys::av_frame_get_buffer(frame.as_mut_ptr(), 0);
+        let ret = unsafe {
+            ffmpeg_next::sys::av_frame_get_buffer(frame.as_mut_ptr(), 0)
+        };
+        if ret < 0 {
+            anyhow::bail!("av_frame_get_buffer failed for YUV frame: error code {}", ret);
         }
 
         // Convert RGBA → YUV420P using cached swscale context
