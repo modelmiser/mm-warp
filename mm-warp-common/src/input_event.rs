@@ -19,19 +19,31 @@ impl InputEvent {
 
         match bytes[0] {
             1 => { // KeyPress
+                if bytes.len() < 5 {
+                    anyhow::bail!("KeyPress too short: {} bytes", bytes.len());
+                }
                 let key = u32::from_be_bytes(bytes[1..5].try_into()?);
                 Ok(InputEvent::KeyPress { key })
             }
             2 => { // KeyRelease
+                if bytes.len() < 5 {
+                    anyhow::bail!("KeyRelease too short: {} bytes", bytes.len());
+                }
                 let key = u32::from_be_bytes(bytes[1..5].try_into()?);
                 Ok(InputEvent::KeyRelease { key })
             }
             3 => { // MouseMove
+                if bytes.len() < 9 {
+                    anyhow::bail!("MouseMove too short: {} bytes", bytes.len());
+                }
                 let x = i32::from_be_bytes(bytes[1..5].try_into()?);
                 let y = i32::from_be_bytes(bytes[5..9].try_into()?);
                 Ok(InputEvent::MouseMove { x, y })
             }
             4 => { // MouseButton
+                if bytes.len() < 6 {
+                    anyhow::bail!("MouseButton too short: {} bytes", bytes.len());
+                }
                 let button = u32::from_be_bytes(bytes[1..5].try_into()?);
                 let pressed = bytes[5] == 1;
                 Ok(InputEvent::MouseButton { button, pressed })

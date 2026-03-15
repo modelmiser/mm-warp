@@ -1,6 +1,8 @@
-old/
 target/
 .claude/
+.crystal/
+.crystal-stem/
+INSIGHTS.md
 *.swp
 *.swo
 *~

@@ -1,6 +1,6 @@
 use anyhow::{Context, Result};
 use std::net::SocketAddr;
-use std::os::fd::{AsFd, AsRawFd, OwnedFd};
+use std::os::fd::AsFd;
 use quinn::{Endpoint, ServerConfig};
 use rustls::pki_types::{CertificateDer, PrivateKeyDer};
 use ffmpeg_next::software::scaling::{context::Context as ScaleContext, flag::Flags};
@@ -11,17 +11,17 @@ use wayland_protocols_wlr::screencopy::v1::client::{
     zwlr_screencopy_manager_v1::ZwlrScreencopyManagerV1,
     zwlr_screencopy_frame_v1::{ZwlrScreencopyFrameV1, Event as FrameEvent},
 };
-use memmap2::MmapMut;
-use nix::sys::memfd;
-use nix::unistd::ftruncate;
+
+// Frame capture trait
+pub mod capture;
 
 // ext-image-copy-capture-v1 support (COSMIC, newer compositors)
 pub mod ext_capture;
 
-// Input event handling
-pub mod input_event;
+// Input event handling (from shared crate)
+pub use mm_warp_common::input_event;
 pub mod input_inject;
-pub use input_event::InputEvent;
+pub use mm_warp_common::InputEvent;
 pub use input_inject::InputInjector;
 
 /// Represents a detected display output
@@ -32,59 +32,10 @@ pub struct Display {
     pub height: i32,
 }
 
-/// Frame buffer for captured screen data
-pub struct FrameBuffer {
-    frames: Vec<Vec<u8>>,
-    capacity: usize,
-    current: usize,
-}
-
-impl FrameBuffer {
-    pub fn new(capacity: usize) -> Self {
-        Self {
-            frames: Vec::with_capacity(capacity),
-            capacity,
-            current: 0,
-        }
-    }
-
-    /// Add frame to ring buffer
-    pub fn push(&mut self, frame: Vec<u8>) {
-        if self.frames.len() < self.capacity {
-            self.frames.push(frame);
-        } else {
-            self.frames[self.current] = frame;
-        }
-        self.current = (self.current + 1) % self.capacity;
-    }
-
-    /// Get latest frame
-    pub fn latest(&self) -> Option<&[u8]> {
-        if self.frames.is_empty() {
-            None
-        } else {
-            let idx = if self.current == 0 {
-                self.frames.len() - 1
-            } else {
-                self.current - 1
-            };
-            Some(&self.frames[idx])
-        }
-    }
-
-    /// Get frame count
-    pub fn len(&self) -> usize {
-        self.frames.len()
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.frames.is_empty()
-    }
-}
-
 /// H.264 encoder using ffmpeg
 pub struct H264Encoder {
     encoder: ffmpeg_next::encoder::Video,
+    scaler: ScaleContext,
     width: u32,
     height: u32,
     frame_count: i64,
@@ -122,7 +73,17 @@ impl H264Encoder {
 
         let encoder = encoder.open_with(opts).context("Failed to open encoder")?;
 
-        Ok(Self { encoder, width, height, frame_count: 0, force_keyframe_next: false })
+        let scaler = ScaleContext::get(
+            ffmpeg_next::format::Pixel::RGBA,
+            width,
+            height,
+            ffmpeg_next::format::Pixel::YUV420P,
+            width,
+            height,
+            Flags::BILINEAR,
+        ).context("Failed to create encoder scaler")?;
+
+        Ok(Self { encoder, scaler, width, height, frame_count: 0, force_keyframe_next: false })
     }
 
     /// Force next frame to be a keyframe (IDR frame with SPS/PPS)
@@ -159,18 +120,8 @@ impl H264Encoder {
             ffmpeg_next::sys::av_frame_get_buffer(frame.as_mut_ptr(), 0);
         }
 
-        // Convert RGBA → YUV420P using swscale (proper RGB color)
-        let mut scaler = ScaleContext::get(
-            ffmpeg_next::format::Pixel::RGBA,
-            self.width,
-            self.height,
-            ffmpeg_next::format::Pixel::YUV420P,
-            self.width,
-            self.height,
-            Flags::BILINEAR,
-        ).context("Failed to create swscale context")?;
-
-        scaler.run(&rgba_src_frame, &mut frame)
+        // Convert RGBA → YUV420P using cached swscale context
+        self.scaler.run(&rgba_src_frame, &mut frame)
             .context("Failed to convert RGBA to YUV420P")?;
 
         // Set presentation timestamp (incrementing for each frame)
@@ -265,7 +216,6 @@ struct CaptureState {
     frame_ready: bool,
     frame_failed: bool,
     buffer_info: Option<(u32, u32, u32, u32)>, // format, width, height, stride
-    pixels: Vec<u8>,
 }
 
 impl CaptureState {
@@ -274,7 +224,6 @@ impl CaptureState {
             frame_ready: false,
             frame_failed: false,
             buffer_info: None,
-            pixels: Vec::new(),
         }
     }
 }
@@ -327,33 +276,13 @@ impl Dispatch<ZwlrScreencopyFrameV1, ()> for CaptureState {
     }
 }
 
-// Dispatch for other Wayland objects (minimal)
-impl Dispatch<wl_shm::WlShm, ()> for CaptureState {
-    fn event(_: &mut Self, _: &wl_shm::WlShm, _: wl_shm::Event, _: &(), _: &Connection, _: &QueueHandle<Self>) {}
-}
-
-impl Dispatch<wl_buffer::WlBuffer, ()> for CaptureState {
-    fn event(_: &mut Self, _: &wl_buffer::WlBuffer, _: wl_buffer::Event, _: &(), _: &Connection, _: &QueueHandle<Self>) {}
-}
-
-impl Dispatch<wl_shm_pool::WlShmPool, ()> for CaptureState {
-    fn event(_: &mut Self, _: &wl_shm_pool::WlShmPool, _: wl_shm_pool::Event, _: &(), _: &Connection, _: &QueueHandle<Self>) {}
-}
-
-impl Dispatch<wl_output::WlOutput, ()> for CaptureState {
-    fn event(_: &mut Self, _: &wl_output::WlOutput, _: wl_output::Event, _: &(), _: &Connection, _: &QueueHandle<Self>) {}
-}
-
-impl Dispatch<ZwlrScreencopyManagerV1, ()> for CaptureState {
-    fn event(
-        _: &mut Self,
-        _: &ZwlrScreencopyManagerV1,
-        _event: <ZwlrScreencopyManagerV1 as wayland_client::Proxy>::Event,
-        _: &(),
-        _: &Connection,
-        _: &QueueHandle<Self>,
-    ) {}
-}
+mm_warp_common::wayland_dispatch_noop!(CaptureState;
+    wl_shm::WlShm,
+    wl_buffer::WlBuffer,
+    wl_shm_pool::WlShmPool,
+    wl_output::WlOutput,
+    ZwlrScreencopyManagerV1,
+);
 
 impl Dispatch<wl_registry::WlRegistry, GlobalListContents> for CaptureState {
     fn event(_: &mut Self, _: &wl_registry::WlRegistry, _: wl_registry::Event, _: &GlobalListContents, _: &Connection, _: &QueueHandle<Self>) {}
@@ -363,7 +292,6 @@ impl Dispatch<wl_registry::WlRegistry, GlobalListContents> for CaptureState {
 pub struct WaylandConnection {
     connection: Connection,
     displays: Vec<Display>,
-    outputs: Vec<wl_output::WlOutput>,
 }
 
 impl WaylandConnection {
@@ -375,7 +303,6 @@ impl WaylandConnection {
         Ok(Self {
             connection,
             displays: Vec::new(),
-            outputs: Vec::new(),
         })
     }
 
@@ -435,19 +362,7 @@ impl WaylandConnection {
 
         tracing::debug!("Creating shm buffer: {}x{}, size={}", width, height, size);
 
-        // Create memfd
-        let fd = memfd::memfd_create(
-            std::ffi::CStr::from_bytes_with_nul(b"wl_shm\0").unwrap(),
-            memfd::MemFdCreateFlag::MFD_CLOEXEC,
-        ).context("Failed to create memfd")?;
-
-        // Truncate to size
-        ftruncate(&fd, size as i64).context("Failed to truncate memfd")?;
-
-        // Create mmap
-        let mut mmap = unsafe {
-            MmapMut::map_mut(&fd).context("Failed to mmap")?
-        };
+        let (fd, mmap) = mm_warp_common::buffer::create_memfd_mmap("wl_shm", size)?;
 
         // Create wl_shm_pool and buffer
         let pool = shm.create_pool(fd.as_fd(), size as i32, &qh, ());
@@ -499,20 +414,19 @@ impl WaylandConnection {
 
         // Copy from mmap to output buffer (convert ARGB to RGBA)
         let mut rgba_buffer = vec![0u8; size];
-        let argb_data = mmap.as_ref();
-
-        // Convert ARGB8888 → RGBA
-        for i in 0..(width * height) as usize {
-            let idx = i * 4;
-            // ARGB: [B, G, R, A] in memory (little-endian)
-            // RGBA: [R, G, B, A]
-            rgba_buffer[idx] = argb_data[idx + 2];     // R
-            rgba_buffer[idx + 1] = argb_data[idx + 1]; // G
-            rgba_buffer[idx + 2] = argb_data[idx];     // B
-            rgba_buffer[idx + 3] = argb_data[idx + 3]; // A
-        }
+        mm_warp_common::pixel::argb8888_to_rgba(mmap.as_ref(), &mut rgba_buffer, width, height);
 
         Ok(rgba_buffer)
+    }
+}
+
+impl capture::FrameSource for WaylandConnection {
+    fn capture_frame(&mut self) -> Result<Vec<u8>> {
+        self.capture_frame()
+    }
+
+    fn resolution(&self) -> mm_warp_common::Resolution {
+        mm_warp_common::Resolution::new(1920, 1080) // hardcoded in capture_frame
     }
 }
 
@@ -536,30 +450,6 @@ mod tests {
             let frame = conn.capture_frame();
             assert!(frame.is_ok(), "Stub should return buffer");
         }
-    }
-
-    #[test]
-    fn test_frame_buffer() {
-        let mut buf = FrameBuffer::new(3);
-
-        // Empty buffer
-        assert_eq!(buf.len(), 0);
-        assert!(buf.latest().is_none());
-
-        // Add frames
-        buf.push(vec![1, 2, 3]);
-        buf.push(vec![4, 5, 6]);
-        assert_eq!(buf.len(), 2);
-        assert_eq!(buf.latest(), Some(&[4u8, 5, 6][..]));
-
-        // Fill to capacity
-        buf.push(vec![7, 8, 9]);
-        assert_eq!(buf.len(), 3);
-
-        // Overflow (ring buffer wraps)
-        buf.push(vec![10, 11, 12]);
-        assert_eq!(buf.len(), 3); // Still 3 (capacity)
-        assert_eq!(buf.latest(), Some(&[10u8, 11, 12][..]));
     }
 
     #[test]

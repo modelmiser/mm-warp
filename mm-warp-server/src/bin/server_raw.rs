@@ -1,4 +1,4 @@
-use mm_warp_server::{QuicServer, FrameBuffer};
+use mm_warp_server::QuicServer;
 use anyhow::Result;
 
 #[tokio::main]
@@ -29,7 +29,7 @@ async fn main() -> Result<()> {
 
         for pixel in frame.chunks_mut(4) {
             pixel[0] = brightness;           // R
-            pixel[1] = (255 - brightness);   // G
+            pixel[1] = 255 - brightness;   // G
             pixel[2] = ((i * 40) % 255) as u8; // B
             pixel[3] = 255;                  // A
         }

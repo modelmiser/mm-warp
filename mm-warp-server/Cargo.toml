@@ -4,6 +4,7 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
+mm-warp-common = { path = "../mm-warp-common" }
 tokio = { workspace = true }
 quinn = { workspace = true }
 rustls = { workspace = true }
@@ -28,4 +29,7 @@ ffmpeg-next = { workspace = true }
 
 # Input injection
 evdev = "0.12"
+
+# CLI
+clap = { version = "4", features = ["derive"] }
 

@@ -2,7 +2,7 @@
 // Based on wl-screenrec: https://github.com/russelltg/wl-screenrec
 
 use anyhow::{Context, Result};
-use std::os::fd::{AsFd, OwnedFd};
+use std::os::fd::AsFd;
 use wayland_client::{Connection, Dispatch, QueueHandle, Proxy};
 use wayland_client::globals::{registry_queue_init, GlobalListContents};
 use wayland_client::protocol::{wl_registry, wl_output, wl_shm, wl_buffer, wl_shm_pool};
@@ -16,21 +16,20 @@ use wayland_protocols::ext::image_copy_capture::v1::client::{
     ext_image_copy_capture_session_v1::{self, ExtImageCopyCaptureSessionV1},
 };
 use memmap2::MmapMut;
-use nix::sys::memfd;
-use nix::unistd::ftruncate;
 
 /// Simplified capture using ext-image-copy-capture-v1
 /// For mm-warp we just need RGB frames in memory (no GPU encoding)
 pub struct ExtCapture {
-    connection: Connection,
+    _connection: Connection,        // Must stay alive for Wayland protocol
+    event_queue: wayland_client::EventQueue<CaptureState>,
     session: ExtImageCopyCaptureSessionV1,
-    shm: wl_shm::WlShm,
-    pool: wl_shm_pool::WlShmPool,
+    _shm: wl_shm::WlShm,
+    _pool: wl_shm_pool::WlShmPool,
     buffer: wl_buffer::WlBuffer,
     mmap: MmapMut,
     width: u32,
     height: u32,
-    refresh_rate: u32, // Monitor refresh rate in Hz
+    refresh_rate: u32,
 }
 
 /// State for event handling during capture
@@ -40,12 +39,7 @@ struct CaptureState {
     width: Option<u32>,
     height: Option<u32>,
     shm_format: Option<u32>,
-    session: Option<ExtImageCopyCaptureSessionV1>,
-    buffer: Option<wl_buffer::WlBuffer>,
-    mmap: Option<MmapMut>,
-    logical_width: Option<i32>,
-    logical_height: Option<i32>,
-    refresh_rate: Option<u32>, // Monitor refresh rate from wl_output mode
+    refresh_rate: Option<u32>,
 }
 
 impl CaptureState {
@@ -56,12 +50,7 @@ impl CaptureState {
             width: None,
             height: None,
             shm_format: None,
-            session: None,
-            buffer: None,
-            mmap: None,
             refresh_rate: None,
-            logical_width: None,
-            logical_height: None,
         }
     }
 }
@@ -102,7 +91,6 @@ impl ExtCapture {
 
         // Get buffer constraints
         let mut state = CaptureState::new();
-        state.session = Some(session.clone());
 
         while state.width.is_none() && !state.frame_failed {
             event_queue.blocking_dispatch(&mut state)
@@ -123,16 +111,7 @@ impl ExtCapture {
         let stride = width * 4;
         let size = (stride * height) as usize;
 
-        let fd = memfd::memfd_create(
-            std::ffi::CStr::from_bytes_with_nul(b"ext_cap\0").unwrap(),
-            memfd::MemFdCreateFlag::MFD_CLOEXEC,
-        ).context("Failed to create memfd")?;
-
-        ftruncate(&fd, size as i64).context("Failed to truncate memfd")?;
-
-        let mmap = unsafe {
-            MmapMut::map_mut(&fd).context("Failed to mmap")?
-        };
+        let (fd, mmap) = mm_warp_common::buffer::create_memfd_mmap("ext_cap", size)?;
 
         let pool = shm.create_pool(fd.as_fd(), size as i32, &qh, ());
         let buffer = pool.create_buffer(
@@ -146,10 +125,11 @@ impl ExtCapture {
         );
 
         Ok(Self {
-            connection,
+            _connection: connection,
+            event_queue,
             session,
-            shm,
-            pool,
+            _shm: shm,
+            _pool: pool,
             buffer,
             mmap,
             width,
@@ -177,20 +157,18 @@ impl ExtCapture {
 
     /// Capture a single frame using ext-image-copy-capture (optimized)
     pub fn capture_frame(&mut self) -> Result<Vec<u8>> {
-        // Need queue handle for creating frame
-        let (_, mut eq) = registry_queue_init::<CaptureState>(&self.connection)?;
-        let qh = eq.handle();
+        let qh = self.event_queue.handle();
 
-        // Create and capture frame (reusing session and buffer)
+        // Create and capture frame (reusing session, buffer, and event queue)
         let frame = self.session.create_frame(&qh, ());
         frame.attach_buffer(&self.buffer);
         frame.damage_buffer(0, 0, self.width as i32, self.height as i32);
         frame.capture();
 
-        // Wait for frame ready (minimal event loop)
+        // Wait for frame ready using persistent event queue
         let mut state = CaptureState::new();
         while !state.frame_ready && !state.frame_failed {
-            eq.blocking_dispatch(&mut state)?;
+            self.event_queue.blocking_dispatch(&mut state)?;
         }
 
         if state.frame_failed {
@@ -210,22 +188,26 @@ impl ExtCapture {
     }
 }
 
+impl crate::capture::FrameSource for ExtCapture {
+    fn capture_frame(&mut self) -> anyhow::Result<Vec<u8>> {
+        self.capture_frame()
+    }
+
+    fn resolution(&self) -> mm_warp_common::Resolution {
+        mm_warp_common::Resolution::new(self.width, self.height)
+    }
+}
+
 // Minimal dispatch implementations (required by Wayland)
 impl Dispatch<wl_registry::WlRegistry, GlobalListContents> for CaptureState {
     fn event(_: &mut Self, _: &wl_registry::WlRegistry, _: wl_registry::Event, _: &GlobalListContents, _: &Connection, _: &QueueHandle<Self>) {}
 }
 
-impl Dispatch<ExtOutputImageCaptureSourceManagerV1, ()> for CaptureState {
-    fn event(_: &mut Self, _: &ExtOutputImageCaptureSourceManagerV1, _: <ExtOutputImageCaptureSourceManagerV1 as Proxy>::Event, _: &(), _: &Connection, _: &QueueHandle<Self>) {}
-}
-
-impl Dispatch<ExtImageCopyCaptureManagerV1, ()> for CaptureState {
-    fn event(_: &mut Self, _: &ExtImageCopyCaptureManagerV1, _: <ExtImageCopyCaptureManagerV1 as Proxy>::Event, _: &(), _: &Connection, _: &QueueHandle<Self>) {}
-}
-
-impl Dispatch<ExtImageCaptureSourceV1, ()> for CaptureState {
-    fn event(_: &mut Self, _: &ExtImageCaptureSourceV1, _: <ExtImageCaptureSourceV1 as Proxy>::Event, _: &(), _: &Connection, _: &QueueHandle<Self>) {}
-}
+mm_warp_common::wayland_dispatch_noop!(CaptureState;
+    ExtOutputImageCaptureSourceManagerV1,
+    ExtImageCopyCaptureManagerV1,
+    ExtImageCaptureSourceV1,
+);
 
 impl Dispatch<ExtImageCopyCaptureSessionV1, ()> for CaptureState {
     fn event(
@@ -291,41 +273,28 @@ impl Dispatch<ExtImageCopyCaptureFrameV1, ()> for CaptureState {
 
 impl Dispatch<wl_output::WlOutput, ()> for CaptureState {
     fn event(state: &mut Self, _: &wl_output::WlOutput, event: wl_output::Event, _: &(), _: &Connection, _: &QueueHandle<Self>) {
-        // Capture logical size (accounts for scaling)
-        if let wl_output::Event::Geometry { .. } = event {
-            // Geometry gives physical info, we want logical
-        }
         if let wl_output::Event::Mode { flags, width, height, refresh } = event {
             use wayland_client::WEnum;
             let refresh_hz = (refresh / 1000) as u32; // mHz to Hz
 
-            // Only use the CURRENT mode (the one actually active)
             let is_current = match flags {
                 WEnum::Value(f) => f.contains(wl_output::Mode::Current),
                 WEnum::Unknown(_) => false,
             };
 
             if is_current {
-                state.logical_width = Some(width);
-                state.logical_height = Some(height);
                 state.refresh_rate = Some(refresh_hz);
-                tracing::info!("Using current output mode: {}x{} @ {} Hz", width, height, refresh_hz);
+                tracing::info!("Output mode: {}x{} @ {} Hz", width, height, refresh_hz);
             }
         }
     }
 }
 
-impl Dispatch<wl_shm::WlShm, ()> for CaptureState {
-    fn event(_: &mut Self, _: &wl_shm::WlShm, _: wl_shm::Event, _: &(), _: &Connection, _: &QueueHandle<Self>) {}
-}
-
-impl Dispatch<wl_shm_pool::WlShmPool, ()> for CaptureState {
-    fn event(_: &mut Self, _: &wl_shm_pool::WlShmPool, _: wl_shm_pool::Event, _: &(), _: &Connection, _: &QueueHandle<Self>) {}
-}
-
-impl Dispatch<wl_buffer::WlBuffer, ()> for CaptureState {
-    fn event(_: &mut Self, _: &wl_buffer::WlBuffer, _: wl_buffer::Event, _: &(), _: &Connection, _: &QueueHandle<Self>) {}
-}
+mm_warp_common::wayland_dispatch_noop!(CaptureState;
+    wl_shm::WlShm,
+    wl_shm_pool::WlShmPool,
+    wl_buffer::WlBuffer,
+);
 
 #[cfg(test)]
 mod tests {

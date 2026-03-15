@@ -7,26 +7,24 @@ use wayland_client::protocol::{wl_compositor, wl_surface, wl_shm, wl_shm_pool, w
 use wayland_protocols::xdg::shell::client::{xdg_wm_base, xdg_surface, xdg_toplevel};
 use wayland_protocols::wp::viewporter::client::{wp_viewporter, wp_viewport};
 use memmap2::MmapMut;
-use nix::sys::memfd;
-use nix::unistd::ftruncate;
 use std::sync::{Arc, Mutex};
 
 pub struct WaylandDisplay {
     connection: Connection,
     surface: wl_surface::WlSurface,
-    xdg_surface: xdg_surface::XdgSurface,
+    _xdg_surface: xdg_surface::XdgSurface,     // Must stay alive for window lifecycle
     _xdg_toplevel: xdg_toplevel::XdgToplevel,
-    viewport: wp_viewport::WpViewport,
-    shm: wl_shm::WlShm,
-    pool: wl_shm_pool::WlShmPool,
+    _viewport: wp_viewport::WpViewport,          // Must stay alive for scaling
+    _shm: wl_shm::WlShm,
+    _pool: wl_shm_pool::WlShmPool,
     buffer: wl_buffer::WlBuffer,
     mmap: MmapMut,
     buffer_width: u32,
     buffer_height: u32,
     pending_events: Arc<Mutex<Vec<crate::InputEvent>>>,
     event_queue: wayland_client::EventQueue<State>,
-    _keyboard: wl_keyboard::WlKeyboard, // Keep alive to receive events!
-    _pointer: wl_pointer::WlPointer,   // Keep alive to receive events!
+    _keyboard: wl_keyboard::WlKeyboard,
+    _pointer: wl_pointer::WlPointer,
 }
 
 // State for input event collection
@@ -38,9 +36,7 @@ impl Dispatch<wl_registry::WlRegistry, GlobalListContents> for State {
     fn event(_: &mut Self, _: &wl_registry::WlRegistry, _: wl_registry::Event, _: &GlobalListContents, _: &Connection, _: &QueueHandle<Self>) {}
 }
 
-impl Dispatch<wl_seat::WlSeat, ()> for State {
-    fn event(_: &mut Self, _: &wl_seat::WlSeat, _: wl_seat::Event, _: &(), _: &Connection, _: &QueueHandle<Self>) {}
-}
+mm_warp_common::wayland_dispatch_noop!(State; wl_seat::WlSeat);
 
 impl Dispatch<wl_pointer::WlPointer, ()> for State {
     fn event(state: &mut Self, _: &wl_pointer::WlPointer, event: wl_pointer::Event, _: &(), _: &Connection, _: &QueueHandle<Self>) {
@@ -84,25 +80,13 @@ impl Dispatch<wl_keyboard::WlKeyboard, ()> for State {
     }
 }
 
-impl Dispatch<wl_compositor::WlCompositor, ()> for State {
-    fn event(_: &mut Self, _: &wl_compositor::WlCompositor, _: wl_compositor::Event, _: &(), _: &Connection, _: &QueueHandle<Self>) {}
-}
-
-impl Dispatch<wl_surface::WlSurface, ()> for State {
-    fn event(_: &mut Self, _: &wl_surface::WlSurface, _: wl_surface::Event, _: &(), _: &Connection, _: &QueueHandle<Self>) {}
-}
-
-impl Dispatch<wl_shm::WlShm, ()> for State {
-    fn event(_: &mut Self, _: &wl_shm::WlShm, _: wl_shm::Event, _: &(), _: &Connection, _: &QueueHandle<Self>) {}
-}
-
-impl Dispatch<wl_shm_pool::WlShmPool, ()> for State {
-    fn event(_: &mut Self, _: &wl_shm_pool::WlShmPool, _: wl_shm_pool::Event, _: &(), _: &Connection, _: &QueueHandle<Self>) {}
-}
-
-impl Dispatch<wl_buffer::WlBuffer, ()> for State {
-    fn event(_: &mut Self, _: &wl_buffer::WlBuffer, _: wl_buffer::Event, _: &(), _: &Connection, _: &QueueHandle<Self>) {}
-}
+mm_warp_common::wayland_dispatch_noop!(State;
+    wl_compositor::WlCompositor,
+    wl_surface::WlSurface,
+    wl_shm::WlShm,
+    wl_shm_pool::WlShmPool,
+    wl_buffer::WlBuffer,
+);
 
 impl Dispatch<xdg_wm_base::XdgWmBase, ()> for State {
     fn event(_: &mut Self, wm_base: &xdg_wm_base::XdgWmBase, event: xdg_wm_base::Event, _: &(), _: &Connection, _: &QueueHandle<Self>) {
@@ -120,17 +104,11 @@ impl Dispatch<xdg_surface::XdgSurface, ()> for State {
     }
 }
 
-impl Dispatch<xdg_toplevel::XdgToplevel, ()> for State {
-    fn event(_: &mut Self, _: &xdg_toplevel::XdgToplevel, _: xdg_toplevel::Event, _: &(), _: &Connection, _: &QueueHandle<Self>) {}
-}
-
-impl Dispatch<wp_viewporter::WpViewporter, ()> for State {
-    fn event(_: &mut Self, _: &wp_viewporter::WpViewporter, _: wp_viewporter::Event, _: &(), _: &Connection, _: &QueueHandle<Self>) {}
-}
-
-impl Dispatch<wp_viewport::WpViewport, ()> for State {
-    fn event(_: &mut Self, _: &wp_viewport::WpViewport, _: wp_viewport::Event, _: &(), _: &Connection, _: &QueueHandle<Self>) {}
-}
+mm_warp_common::wayland_dispatch_noop!(State;
+    xdg_toplevel::XdgToplevel,
+    wp_viewporter::WpViewporter,
+    wp_viewport::WpViewport,
+);
 
 impl WaylandDisplay {
     pub fn new(width: u32, height: u32) -> Result<Self> {
@@ -194,16 +172,7 @@ impl WaylandDisplay {
         let stride = width * 4;
         let size = (stride * height) as usize;
 
-        let fd = memfd::memfd_create(
-            std::ffi::CStr::from_bytes_with_nul(b"display\0").unwrap(),
-            memfd::MemFdCreateFlag::MFD_CLOEXEC,
-        ).context("Failed to create memfd")?;
-
-        ftruncate(&fd, size as i64).context("Failed to truncate memfd")?;
-
-        let mmap = unsafe {
-            MmapMut::map_mut(&fd).context("Failed to mmap")?
-        };
+        let (fd, mmap) = mm_warp_common::buffer::create_memfd_mmap("display", size)?;
 
         let pool = shm.create_pool(fd.as_fd(), size as i32, &qh, ());
         let buffer = pool.create_buffer(
@@ -225,11 +194,11 @@ impl WaylandDisplay {
         Ok(Self {
             connection,
             surface,
-            xdg_surface,
+            _xdg_surface: xdg_surface,
             _xdg_toplevel: xdg_toplevel,
-            viewport,
-            shm,
-            pool,
+            _viewport: viewport,
+            _shm: shm,
+            _pool: pool,
             buffer,
             mmap,
             buffer_width: width,
@@ -252,14 +221,7 @@ impl WaylandDisplay {
         let mmap_slice = self.mmap.as_mut();
 
         // Copy RGBA data to mmap (convert to ARGB8888 for Wayland)
-        for i in 0..(self.buffer_width * self.buffer_height) as usize {
-            let idx = i * 4;
-            // RGBA → ARGB8888 (little-endian: [B,G,R,A])
-            mmap_slice[idx] = rgba_data[idx + 2];     // B
-            mmap_slice[idx + 1] = rgba_data[idx + 1]; // G
-            mmap_slice[idx + 2] = rgba_data[idx];     // R
-            mmap_slice[idx + 3] = rgba_data[idx + 3]; // A
-        }
+        mm_warp_common::pixel::rgba_to_argb8888(rgba_data, mmap_slice, self.buffer_width, self.buffer_height);
 
         // Reuse existing buffer - just attach and commit (viewport handles scaling)
         self.surface.attach(Some(&self.buffer), 0, 0);

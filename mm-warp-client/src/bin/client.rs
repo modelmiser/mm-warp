@@ -1,18 +1,41 @@
 use mm_warp_client::{QuicClient, H264Decoder, wayland_display::WaylandDisplay, InputEvent};
 use anyhow::Result;
+use clap::Parser;
+
+#[derive(Parser)]
+#[command(name = "mm-warp-client", about = "mm-warp remote desktop client")]
+struct Args {
+    /// Server address to connect to
+    #[arg(short, long, default_value = "127.0.0.1:4433")]
+    server: String,
+
+    /// Stream resolution (WxH)
+    #[arg(short, long, default_value = "3840x2160")]
+    resolution: String,
+}
+
+fn parse_resolution(s: &str) -> Result<(u32, u32)> {
+    let parts: Vec<&str> = s.split('x').collect();
+    if parts.len() != 2 {
+        anyhow::bail!("Resolution must be WxH (e.g., 3840x2160)");
+    }
+    Ok((parts[0].parse()?, parts[1].parse()?))
+}
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    let args = Args::parse();
+
+    tracing_subscriber::fmt::init();
     println!("=== mm-warp Client (Wayland Display) ===\n");
 
-    // Create client
-    println!("Creating QUIC client...");
-    let client = QuicClient::new()?;
-    println!("✅ Client ready\n");
+    let (width, height) = parse_resolution(&args.resolution)?;
 
-    // Connect to server with retries
-    let server_addr = "127.0.0.1:4433".parse().unwrap();
-    println!("Connecting to server at {}...", server_addr);
+    let client = QuicClient::new()?;
+
+    let server_addr = args.server.parse()
+        .map_err(|e| anyhow::anyhow!("Invalid server address '{}': {}", args.server, e))?;
+    println!("Connecting to {}...", server_addr);
 
     let connection = loop {
         match client.connect(server_addr).await {
@@ -27,32 +50,29 @@ async fn main() -> Result<()> {
         }
     };
 
-    // Create decoder (4K for COSMIC)
-    println!("Creating H.264 decoder (3840x2160)...");
-    let mut decoder = H264Decoder::new(3840, 2160)?;
+    println!("Creating H.264 decoder ({}x{})...", width, height);
+    let mut decoder = H264Decoder::new(width, height)?;
     println!("✅ Decoder ready\n");
 
-    // Create Wayland display window
-    // Start with 1920x1080 window size (will display 4K buffer scaled down)
-    println!("Creating Wayland display window (1920x1080 initial size)...");
-    let mut display = WaylandDisplay::new(3840, 2160)?;
+    println!("Creating Wayland display window...");
+    let mut display = WaylandDisplay::new(width, height)?;
     println!("✅ Display ready\n");
 
-    // Receive, decode and display frames continuously with stats
     println!("Receiving and displaying...");
-    println!("🎹 Real keyboard/mouse control active! Focus the window and type.\n");
-    let mut frame_count = 0;
+    println!("🎹 Keyboard/mouse control active — focus the window and type.\n");
 
-    // Stats tracking
-    let mut stats_start = tokio::time::Instant::now();
-    let mut interval_frames = 0u64;
-    let mut interval_bytes = 0u64;
+    let mut stats = mm_warp_common::stats::StreamStats::new();
 
     loop {
         let encoded = match QuicClient::receive_frame(&connection).await {
             Ok(e) => e,
             Err(e) => {
-                println!("\n⚠️  Connection lost: {}", e);
+                let msg = e.to_string();
+                if msg.contains("Broken pipe") || msg.contains("closed") || msg.contains("reset") {
+                    println!("\n⚠️  Connection lost — server disconnected.");
+                } else {
+                    println!("\n⚠️  Connection error: {}", e);
+                }
                 println!("Restart client to reconnect.");
                 return Ok(());
             }
@@ -61,38 +81,24 @@ async fn main() -> Result<()> {
 
         let decoded = decoder.decode(&encoded)?;
         if !decoded.is_empty() {
-            // Display frame - handle Wayland errors gracefully
             if let Err(e) = display.display_frame(&decoded) {
-                if e.to_string().contains("Broken pipe") {
-                    println!("\n✅ Window closed - disconnecting gracefully");
+                let msg = e.to_string();
+                if msg.contains("Broken pipe") || msg.contains("closed") {
+                    println!("\n✅ Window closed — disconnecting gracefully");
                     return Ok(());
                 }
                 return Err(e);
             }
 
-            frame_count += 1;
-            interval_frames += 1;
-            interval_bytes += frame_size;
+            stats.record_frame(frame_size);
 
-            // Poll and send input events
             let input_events = display.poll_input_events();
             for event in input_events {
                 let _ = InputEvent::send(&connection, event).await;
             }
 
-            // Print stats every second
-            let elapsed = stats_start.elapsed();
-            if elapsed.as_secs() >= 1 {
-                let fps = interval_frames as f64 / elapsed.as_secs_f64();
-                let mbps = (interval_bytes as f64 * 8.0) / (elapsed.as_secs_f64() * 1_000_000.0);
-                let avg_kb = if interval_frames > 0 { interval_bytes / interval_frames / 1024 } else { 0 };
-
-                println!("[CLIENT] FPS: {:.1} | Bitrate: {:.2} Mbps | Avg: {}KB | Total: {} frames",
-                    fps, mbps, avg_kb, frame_count);
-
-                stats_start = tokio::time::Instant::now();
-                interval_frames = 0;
-                interval_bytes = 0;
+            if let Some(report) = stats.report_if_due("CLIENT", None) {
+                println!("{}", report);
             }
         }
     }

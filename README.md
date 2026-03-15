@@ -4,7 +4,7 @@
 
 A modern remote desktop solution built on Wayland protocols, QUIC networking, and H.264 streaming. Designed for COSMIC, works on Sway/Hyprland/wlroots compositors.
 
-## Status: Production Ready ✅
+## Status: Working Prototype (Alpha)
 
 **Working features:**
 - 🖥️ **4K screen capture** at 18-20 FPS on COSMIC
@@ -29,9 +29,9 @@ A modern remote desktop solution built on Wayland protocols, QUIC networking, an
 - ✅ Native Wayland (uses compositor protocols directly)
 - ✅ Modern stack (Rust, QUIC, H.264)
 - ✅ Open source (GPL-3 license - COSMIC ecosystem compatible)
-- ✅ Honest about limitations (see [WHY-COSMIC-NEEDS-REMOTEDESKTOP-PORTAL.md](WHY-COSMIC-NEEDS-REMOTEDESKTOP-PORTAL.md))
+- ✅ Honest about limitations (see [RemoteDesktop portal notes](#documentation))
 
-**Note:** Input injection currently uses ydotool (kernel workaround) because COSMIC hasn't implemented the RemoteDesktop portal yet. See [WHY-COSMIC-NEEDS-REMOTEDESKTOP-PORTAL.md](WHY-COSMIC-NEEDS-REMOTEDESKTOP-PORTAL.md) for details and [issue #23](https://github.com/pop-os/xdg-desktop-portal-cosmic/issues/23).
+**Note:** Input injection currently uses ydotool (kernel workaround) because COSMIC hasn't implemented the RemoteDesktop portal yet. See [pop-os/xdg-desktop-portal-cosmic#23](https://github.com/pop-os/xdg-desktop-portal-cosmic/issues/23).
 
 ---
 
@@ -314,5 +314,5 @@ which ydotool
 
 ## Documentation
 
-- [WHY-COSMIC-NEEDS-REMOTEDESKTOP-PORTAL.md](WHY-COSMIC-NEEDS-REMOTEDESKTOP-PORTAL.md) - Why we need RemoteDesktop portal (issue #23)
-- [MOUSE-CURSOR-METHODS.md](MOUSE-CURSOR-METHODS.md) - Current mouse injection methods and trade-offs
+- **RemoteDesktop portal**: COSMIC hasn't implemented the RemoteDesktop portal yet ([pop-os/xdg-desktop-portal-cosmic#23](https://github.com/pop-os/xdg-desktop-portal-cosmic/issues/23)). Input injection uses ydotool as a workaround.
+- **Mouse injection**: See [Setup Mouse Control](#3-setup-mouse-control-optional---honest-disclaimer) for trade-offs.

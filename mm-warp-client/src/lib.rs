@@ -7,9 +7,9 @@ use std::sync::Arc;
 // Wayland display module
 pub mod wayland_display;
 
-// Input event handling
-pub mod input_event;
-pub use input_event::InputEvent;
+// Input event handling (from shared crate)
+pub use mm_warp_common::input_event;
+pub use mm_warp_common::InputEvent;
 
 /// QUIC client for receiving frames
 pub struct QuicClient {
@@ -77,6 +77,7 @@ impl QuicClient {
 /// H.264 decoder using ffmpeg (matching encoder pattern exactly)
 pub struct H264Decoder {
     decoder: ffmpeg_next::decoder::Opened,
+    scaler: ScaleContext,
     width: u32,
     height: u32,
 }
@@ -94,7 +95,17 @@ impl H264Decoder {
             .open_as(codec)
             .map_err(|e| anyhow::anyhow!("Failed to open decoder: {}", e))?;
 
-        Ok(Self { decoder, width, height })
+        let scaler = ScaleContext::get(
+            ffmpeg_next::format::Pixel::YUV420P,
+            width,
+            height,
+            ffmpeg_next::format::Pixel::RGBA,
+            width,
+            height,
+            Flags::BILINEAR,
+        ).context("Failed to create decoder scaler")?;
+
+        Ok(Self { decoder, scaler, width, height })
     }
 
     /// Decode H.264 packet to RGBA frame
@@ -125,18 +136,8 @@ impl H264Decoder {
                     ffmpeg_next::sys::av_frame_get_buffer(rgba_frame.as_mut_ptr(), 0);
                 }
 
-                // Convert YUV420P → RGBA using swscale
-                let mut scaler = ScaleContext::get(
-                    ffmpeg_next::format::Pixel::YUV420P,
-                    self.width,
-                    self.height,
-                    ffmpeg_next::format::Pixel::RGBA,
-                    self.width,
-                    self.height,
-                    Flags::BILINEAR,
-                ).context("Failed to create decoder swscale context")?;
-
-                scaler.run(&decoded, &mut rgba_frame)
+                // Convert YUV420P → RGBA using cached swscale context
+                self.scaler.run(&decoded, &mut rgba_frame)
                     .context("Failed to convert YUV420P to RGBA")?;
 
                 // Copy RGBA data to output vector
