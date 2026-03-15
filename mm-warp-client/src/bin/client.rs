@@ -1,4 +1,4 @@
-use mm_warp_client::{QuicClient, H264Decoder, wayland_display::WaylandDisplay, InputEvent};
+use mm_warp_client::{QuicClient, H264Decoder, wayland_display::WaylandDisplay};
 use anyhow::Result;
 use clap::Parser;
 
@@ -9,17 +9,9 @@ struct Args {
     #[arg(short, long, default_value = "127.0.0.1:4433")]
     server: String,
 
-    /// Stream resolution (WxH)
-    #[arg(short, long, default_value = "3840x2160")]
-    resolution: String,
-}
-
-fn parse_resolution(s: &str) -> Result<(u32, u32)> {
-    let parts: Vec<&str> = s.split('x').collect();
-    if parts.len() != 2 {
-        anyhow::bail!("Resolution must be WxH (e.g., 3840x2160)");
-    }
-    Ok((parts[0].parse()?, parts[1].parse()?))
+    /// Skip TLS certificate verification (INSECURE — allows MITM attacks)
+    #[arg(long)]
+    insecure: bool,
 }
 
 #[tokio::main]
@@ -29,76 +21,122 @@ async fn main() -> Result<()> {
     tracing_subscriber::fmt::init();
     println!("=== mm-warp Client (Wayland Display) ===\n");
 
-    let (width, height) = parse_resolution(&args.resolution)?;
-
     let client = QuicClient::new()?;
 
     let server_addr = args.server.parse()
         .map_err(|e| anyhow::anyhow!("Invalid server address '{}': {}", args.server, e))?;
     println!("Connecting to {}...", server_addr);
 
-    let connection = loop {
-        match client.connect(server_addr).await {
-            Ok(conn) => {
-                println!("✅ Connected\n");
-                break conn;
-            }
-            Err(e) => {
-                eprintln!("⚠️  Connection failed: {} - retrying in 2s...", e);
-                tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
-            }
-        }
-    };
-
-    println!("Creating H.264 decoder ({}x{})...", width, height);
-    let mut decoder = H264Decoder::new(width, height)?;
-    println!("✅ Decoder ready\n");
-
-    println!("Creating Wayland display window...");
-    let mut display = WaylandDisplay::new(width, height)?;
-    println!("✅ Display ready\n");
-
-    println!("Receiving and displaying...");
-    println!("🎹 Keyboard/mouse control active — focus the window and type.\n");
-
-    let mut stats = mm_warp_common::stats::StreamStats::new();
-
+    // Reconnect loop — wraps the entire session
     loop {
-        let encoded = match QuicClient::receive_frame(&connection).await {
-            Ok(e) => e,
-            Err(e) => {
-                let msg = e.to_string();
-                if msg.contains("Broken pipe") || msg.contains("closed") || msg.contains("reset") {
-                    println!("\n⚠️  Connection lost — server disconnected.");
-                } else {
-                    println!("\n⚠️  Connection error: {}", e);
+        let connection = loop {
+            match client.connect(server_addr, args.insecure).await {
+                Ok(conn) => {
+                    println!("✅ Connected\n");
+                    break conn;
                 }
-                println!("Restart client to reconnect.");
-                return Ok(());
+                Err(e) => {
+                    eprintln!("⚠️  Connection failed: {} - retrying in 2s...", e);
+                    tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
+                }
             }
         };
-        let frame_size = encoded.len() as u64;
 
-        let decoded = decoder.decode(&encoded)?;
-        if !decoded.is_empty() {
-            if let Err(e) = display.display_frame(&decoded) {
+        // Receive stream metadata from server (resolution, fps)
+        println!("Waiting for stream metadata...");
+        let meta = match QuicClient::receive_metadata(&connection).await {
+            Ok(m) => m,
+            Err(e) => {
+                eprintln!("⚠️  Failed to receive metadata: {} — reconnecting...", e);
+                tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
+                continue;
+            }
+        };
+        let (width, height) = (meta.width, meta.height);
+
+        // Validate resolution bounds (max 16384x16384 = ~1GB buffer)
+        if width == 0 || height == 0 || width > 16384 || height > 16384 {
+            eprintln!("⚠️  Server sent invalid resolution {}x{} — reconnecting...", width, height);
+            tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
+            continue;
+        }
+        println!("✅ Stream: {}x{} @ {} FPS\n", width, height, meta.fps);
+
+        println!("Creating H.264 decoder ({}x{})...", width, height);
+        let mut decoder = match H264Decoder::new(width, height) {
+            Ok(d) => d,
+            Err(e) => {
+                eprintln!("⚠️  Failed to create decoder: {}", e);
+                return Err(e);
+            }
+        };
+        println!("✅ Decoder ready\n");
+
+        println!("Creating Wayland display window...");
+        let mut display = WaylandDisplay::new(width, height)?;
+        println!("✅ Display ready\n");
+
+        println!("Receiving and displaying...");
+        println!("🎹 Keyboard/mouse control active — focus the window and type.\n");
+
+        let mut stats = mm_warp_common::stats::StreamStats::new();
+
+        let session_result: Result<()> = async {
+            loop {
+                let encoded = match QuicClient::receive_frame(&connection).await {
+                    Ok(e) => e,
+                    Err(e) => {
+                        // Use typed error matching where possible
+                        let msg = e.to_string();
+                        if msg.contains("closed") || msg.contains("reset") || msg.contains("timed out") {
+                            println!("\n⚠️  Connection lost — server disconnected.");
+                        } else {
+                            println!("\n⚠️  Connection error: {}", e);
+                        }
+                        return Ok(()); // break to reconnect
+                    }
+                };
+                let frame_size = encoded.len() as u64;
+
+                let decoded = decoder.decode(&encoded)?;
+                if !decoded.is_empty() {
+                    if let Err(e) = display.display_frame(&decoded) {
+                        let msg = e.to_string();
+                        if msg.contains("Broken pipe") || msg.contains("closed") {
+                            println!("\n✅ Window closed — disconnecting gracefully");
+                            return Err(anyhow::anyhow!("window closed"));
+                        }
+                        return Err(e);
+                    }
+
+                    stats.record_frame(frame_size);
+
+                    let input_events = display.poll_input_events();
+                    for event in input_events {
+                        // Inline send — datagram is fire-and-forget
+                        let _ = connection.send_datagram(event.to_bytes().into());
+                    }
+
+                    if let Some(report) = stats.report_if_due("CLIENT", None) {
+                        println!("{}", report);
+                    }
+                }
+            }
+        }.await;
+
+        match session_result {
+            Ok(()) => {
+                // Connection lost — reconnect
+                println!("Reconnecting in 2s...\n");
+                tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
+                continue;
+            }
+            Err(e) => {
                 let msg = e.to_string();
-                if msg.contains("Broken pipe") || msg.contains("closed") {
-                    println!("\n✅ Window closed — disconnecting gracefully");
+                if msg.contains("window closed") {
                     return Ok(());
                 }
                 return Err(e);
-            }
-
-            stats.record_frame(frame_size);
-
-            let input_events = display.poll_input_events();
-            for event in input_events {
-                let _ = InputEvent::send(&connection, event).await;
-            }
-
-            if let Some(report) = stats.report_if_due("CLIENT", None) {
-                println!("{}", report);
             }
         }
     }

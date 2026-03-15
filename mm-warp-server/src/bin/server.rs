@@ -4,6 +4,7 @@ use clap::Parser;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use tokio::sync::{mpsc, watch};
+use tokio::task::JoinHandle;
 
 #[derive(Parser)]
 #[command(name = "mm-warp-server", about = "mm-warp remote desktop server")]
@@ -19,6 +20,15 @@ async fn main() -> Result<()> {
 
     tracing_subscriber::fmt::init();
     println!("=== mm-warp Server (H.264 over QUIC) ===\n");
+
+    // Warn if binding to non-loopback address
+    let listen_addr: std::net::SocketAddr = args.listen.parse()
+        .map_err(|e| anyhow::anyhow!("Invalid listen address '{}': {}", args.listen, e))?;
+    if !listen_addr.ip().is_loopback() {
+        eprintln!("⚠️  WARNING: Binding to non-loopback address {}.", listen_addr);
+        eprintln!("   Anyone on the network can view your screen and control your input.");
+        eprintln!("   No authentication is configured. Use only on trusted networks.\n");
+    }
 
     // Create screen capture — try ext-image-copy-capture first, fall back to wlr-screencopy
     let (mut capture, monitor_fps): (Box<dyn FrameSource>, u32) = if ExtCapture::is_available() {
@@ -40,8 +50,6 @@ async fn main() -> Result<()> {
     println!("   Capture resolution: {}\n", res);
 
     // Start QUIC server
-    let listen_addr = args.listen.parse()
-        .map_err(|e| anyhow::anyhow!("Invalid listen address '{}': {}", args.listen, e))?;
     println!("Starting QUIC server on {}...", listen_addr);
     let mut server = QuicServer::new(listen_addr).await?;
     println!("✅ Server listening\n");
@@ -57,12 +65,21 @@ async fn main() -> Result<()> {
     // Shared keyframe flag: set by accept loop, consumed by encode task
     let keyframe_flag = Arc::new(AtomicBool::new(false));
 
+    // Track input receiver task for cancellation on new client
+    let mut input_task: Option<JoinHandle<()>> = None;
+
     loop {
         let connection = match server.accept().await {
             Ok(conn) => {
                 println!("✅ Client connected from {}", conn.remote_address());
                 keyframe_flag.store(true, Ordering::Release);
-                println!("   Forcing keyframe for new client\n");
+                println!("   Forcing keyframe for new client");
+
+                // Cancel previous input receiver task if still running
+                if let Some(handle) = input_task.take() {
+                    handle.abort();
+                }
+
                 conn
             }
             Err(e) => {
@@ -71,9 +88,20 @@ async fn main() -> Result<()> {
             }
         };
 
+        // Send stream metadata to client
+        let max_fps = monitor_fps.min(60);
+        let meta = mm_warp_common::StreamMetadata::new(res.width, res.height, max_fps);
+        if let Err(e) = QuicServer::send_metadata(&connection, &meta).await {
+            eprintln!("⚠️  Failed to send metadata: {} — dropping client", e);
+            continue;
+        }
+        println!("   Sent stream metadata: {}x{} @ {} FPS\n", res.width, res.height, max_fps);
+
         // Spawn input event receiver task
         let connection_clone = connection.clone();
-        tokio::spawn(async move {
+        let capture_width = res.width;
+        let capture_height = res.height;
+        input_task = Some(tokio::spawn(async move {
             let mut injector = match InputInjector::new() {
                 Ok(inj) => {
                     println!("✅ Input injector ready\n");
@@ -86,28 +114,27 @@ async fn main() -> Result<()> {
                 }
             };
 
+            // Rate limiting: max 1000 events/sec
+            let mut event_count = 0u32;
+            let mut rate_window = tokio::time::Instant::now();
+
             loop {
                 match connection_clone.read_datagram().await {
                     Ok(bytes) => {
+                        // Rate limiting
+                        event_count += 1;
+                        if rate_window.elapsed() >= tokio::time::Duration::from_secs(1) {
+                            event_count = 0;
+                            rate_window = tokio::time::Instant::now();
+                        }
+                        if event_count > 1000 {
+                            continue; // drop excess events
+                        }
+
                         match InputEvent::from_bytes(&bytes) {
                             Ok(event) => {
-                                match event {
-                                    InputEvent::KeyPress { key } => {
-                                        if let Err(e) = injector.inject_key(key, true) {
-                                            tracing::warn!("inject_key failed: {}", e);
-                                        }
-                                    }
-                                    InputEvent::KeyRelease { key } => {
-                                        if let Err(e) = injector.inject_key(key, false) {
-                                            tracing::warn!("inject_key failed: {}", e);
-                                        }
-                                    }
-                                    InputEvent::MouseMove { x, y } => {
-                                        let _ = injector.inject_mouse_move(x, y);
-                                    }
-                                    InputEvent::MouseButton { button, pressed } => {
-                                        let _ = injector.inject_mouse_button(button, pressed);
-                                    }
+                                if let Err(e) = injector.inject(&event, capture_width, capture_height) {
+                                    tracing::warn!("Input injection failed: {}", e);
                                 }
                             }
                             Err(e) => tracing::warn!("Bad datagram: {}", e),
@@ -117,12 +144,11 @@ async fn main() -> Result<()> {
                 }
             }
             println!("Input receiver ended");
-        });
+        }));
 
         // --- Pipelined streaming: capture → encode → send ---
 
         // Adaptive FPS
-        let max_fps = monitor_fps.min(60);
         let min_fps = 5u32;
 
         println!("Streaming with adaptive FPS ({}-{})...\n", min_fps, max_fps);
@@ -135,7 +161,6 @@ async fn main() -> Result<()> {
         let (fps_tx, fps_rx) = watch::channel(max_fps);
 
         // --- Encode task (blocking thread — H264Encoder::encode is CPU-bound) ---
-        // Transfer ownership of encoder to the blocking thread; get it back when done.
         let keyframe_flag_enc = keyframe_flag.clone();
         let encode_handle = tokio::task::spawn_blocking(move || {
             run_encode_task(encoder, cap_rx, enc_tx, keyframe_flag_enc)
@@ -166,7 +191,6 @@ async fn main() -> Result<()> {
             }
             Err(e) => {
                 eprintln!("⚠️  Encode task panicked: {}", e);
-                // Encoder is lost — recreate
                 encoder = H264Encoder::new(res.width, res.height)?;
             }
         }
@@ -186,8 +210,6 @@ async fn main() -> Result<()> {
 }
 
 /// Capture loop — runs on the main thread because FrameSource is !Send (Wayland).
-/// Reads adaptive FPS from the watch channel. Drops frames via try_send when
-/// the encode stage is backed up.
 async fn run_capture_loop(
     capture: &mut Box<dyn FrameSource>,
     cap_tx: &mpsc::Sender<Vec<u8>>,
@@ -196,8 +218,8 @@ async fn run_capture_loop(
     let mut dropped = 0u64;
 
     loop {
-        let current_fps = *fps_rx.borrow();
-        let frame_duration = tokio::time::Duration::from_millis(1000 / current_fps as u64);
+        let current_fps = (*fps_rx.borrow()).max(1);
+        let frame_duration = tokio::time::Duration::from_secs_f64(1.0 / current_fps as f64);
         let start = tokio::time::Instant::now();
 
         let frame = match capture.capture_frame() {
@@ -217,7 +239,6 @@ async fn run_capture_loop(
                 }
             }
             Err(mpsc::error::TrySendError::Closed(_)) => {
-                // Encode task has exited (client disconnect cascaded)
                 tracing::info!("Capture: encode channel closed, stopping");
                 return Ok(());
             }
@@ -231,8 +252,6 @@ async fn run_capture_loop(
 }
 
 /// Encode task — runs on a blocking thread because H264Encoder::encode() is CPU-bound.
-/// Takes ownership of the encoder and returns it when the session ends, so it can be
-/// reused for the next client without reinitializing ffmpeg.
 fn run_encode_task(
     mut encoder: H264Encoder,
     mut cap_rx: mpsc::Receiver<Vec<u8>>,
@@ -241,9 +260,7 @@ fn run_encode_task(
 ) -> (H264Encoder, Result<()>) {
     let mut dropped = 0u64;
 
-    // blocking_recv: this runs on a blocking thread, not an async executor
     while let Some(frame) = cap_rx.blocking_recv() {
-        // Check if a keyframe was requested (new client connected)
         if keyframe_flag.swap(false, Ordering::AcqRel) {
             encoder.force_keyframe();
         }
@@ -279,8 +296,7 @@ fn run_encode_task(
     (encoder, Ok(()))
 }
 
-/// Send task — async, owns the QUIC connection. Receives encoded H.264 frames
-/// and sends them to the client. Feeds adaptive FPS back to the capture task.
+/// Send task — async, owns the QUIC connection.
 async fn run_send_task(
     connection: quinn::Connection,
     mut enc_rx: mpsc::Receiver<Vec<u8>>,
@@ -300,7 +316,6 @@ async fn run_send_task(
         stats.record_frame(frame_size);
 
         let current_fps = if frame_size / 1024 < idle_threshold_kb { min_fps } else { max_fps };
-        // Ignore error — capture task may have already exited
         let _ = fps_tx.send(current_fps);
 
         if let Some(report) = stats.report_if_due("SERVER", Some(current_fps)) {

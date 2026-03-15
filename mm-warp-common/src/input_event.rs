@@ -1,6 +1,5 @@
 // Input event types for network transmission
-use anyhow::{Context, Result};
-use quinn::Connection;
+use anyhow::Result;
 
 #[derive(Debug, Clone)]
 pub enum InputEvent {
@@ -8,6 +7,7 @@ pub enum InputEvent {
     KeyRelease { key: u32 },
     MouseMove { x: i32, y: i32 },
     MouseButton { button: u32, pressed: bool },
+    MouseScroll { axis: u32, value: i32 },
 }
 
 impl InputEvent {
@@ -48,6 +48,14 @@ impl InputEvent {
                 let pressed = bytes[5] == 1;
                 Ok(InputEvent::MouseButton { button, pressed })
             }
+            5 => { // MouseScroll
+                if bytes.len() < 9 {
+                    anyhow::bail!("MouseScroll too short: {} bytes", bytes.len());
+                }
+                let axis = u32::from_be_bytes(bytes[1..5].try_into()?);
+                let value = i32::from_be_bytes(bytes[5..9].try_into()?);
+                Ok(InputEvent::MouseScroll { axis, value })
+            }
             _ => anyhow::bail!("Unknown input event type: {}", bytes[0]),
         }
     }
@@ -77,15 +85,13 @@ impl InputEvent {
                 bytes.push(if *pressed { 1 } else { 0 });
                 bytes
             }
+            InputEvent::MouseScroll { axis, value } => {
+                let mut bytes = vec![5]; // Type = 5
+                bytes.extend_from_slice(&axis.to_be_bytes());
+                bytes.extend_from_slice(&value.to_be_bytes());
+                bytes
+            }
         }
-    }
-
-    /// Send event over QUIC connection (datagram - fast, unreliable OK)
-    pub async fn send(connection: &Connection, event: Self) -> Result<()> {
-        let bytes = event.to_bytes();
-        connection.send_datagram(bytes.into())
-            .context("Failed to send input event")?;
-        Ok(())
     }
 }
 
@@ -284,5 +290,26 @@ mod tests {
         assert_eq!(InputEvent::KeyRelease { key: 0 }.to_bytes().len(), 5);
         assert_eq!(InputEvent::MouseMove { x: 0, y: 0 }.to_bytes().len(), 9);
         assert_eq!(InputEvent::MouseButton { button: 0, pressed: false }.to_bytes().len(), 6);
+        assert_eq!(InputEvent::MouseScroll { axis: 0, value: 0 }.to_bytes().len(), 9);
+    }
+
+    #[test]
+    fn round_trip_mouse_scroll() {
+        let event = InputEvent::MouseScroll { axis: 0, value: -120 };
+        let bytes = event.to_bytes();
+        let decoded = InputEvent::from_bytes(&bytes).unwrap();
+        match decoded {
+            InputEvent::MouseScroll { axis, value } => {
+                assert_eq!(axis, 0);
+                assert_eq!(value, -120);
+            }
+            other => panic!("Expected MouseScroll, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn from_bytes_truncated_mouse_scroll() {
+        let result = InputEvent::from_bytes(&[5, 0, 0, 0, 1]);
+        assert!(result.is_err());
     }
 }

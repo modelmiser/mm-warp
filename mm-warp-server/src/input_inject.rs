@@ -1,7 +1,7 @@
 // Input injection using uinput (Linux virtual input device)
 // Keyboard AND mouse via evdev — no external tools (ydotool) needed.
 use anyhow::{Context, Result};
-use evdev::{uinput::VirtualDeviceBuilder, AbsInfo, AbsoluteAxisType, AttributeSet, InputEvent as EvInputEvent, EventType, Key, UinputAbsSetup};
+use evdev::{uinput::VirtualDeviceBuilder, AbsInfo, AbsoluteAxisType, AttributeSet, InputEvent as EvInputEvent, EventType, Key, RelativeAxisType, UinputAbsSetup};
 
 pub struct InputInjector {
     keyboard: evdev::uinput::VirtualDevice,
@@ -9,10 +9,22 @@ pub struct InputInjector {
 }
 
 impl InputInjector {
+    /// Linux KEY_MAX — keycodes above this are not valid evdev keys.
+    const KEY_MAX: u16 = 767;
+
+    /// Keys that trigger system power/state changes. Blocked from remote injection.
+    const DANGEROUS_KEYS: &[u32] = &[
+        99,  // KEY_SYSRQ (Alt+SysRq+B = instant reboot)
+        116, // KEY_POWER
+        142, // KEY_SLEEP
+        143, // KEY_WAKEUP
+        205, // KEY_SUSPEND
+    ];
+
     pub fn new() -> Result<Self> {
-        // Keyboard: all standard keys
+        // Keyboard: register all valid keys (0..=KEY_MAX)
         let mut keys = AttributeSet::<Key>::new();
-        for key_code in 0..=255 {
+        for key_code in 0..=Self::KEY_MAX {
             keys.insert(Key::new(key_code));
         }
 
@@ -22,43 +34,55 @@ impl InputInjector {
             .build()
             .context("Failed to build virtual keyboard")?;
 
-        // Mouse: absolute positioning + buttons
+        // Mouse: absolute positioning + buttons + scroll wheel
         let mut mouse_keys = AttributeSet::<Key>::new();
         mouse_keys.insert(Key::BTN_LEFT);
         mouse_keys.insert(Key::BTN_RIGHT);
         mouse_keys.insert(Key::BTN_MIDDLE);
+        mouse_keys.insert(Key::BTN_SIDE);
+        mouse_keys.insert(Key::BTN_EXTRA);
 
-        // Screen dimensions for absolute positioning (large range, compositor scales)
+        // Screen dimensions for absolute positioning (compositor scales)
         let abs_info = AbsInfo::new(0, 0, 32767, 0, 0, 1);
+
+        // Relative axes for scroll wheel
+        let mut rel_axes = AttributeSet::<RelativeAxisType>::new();
+        rel_axes.insert(RelativeAxisType::REL_WHEEL);
+        rel_axes.insert(RelativeAxisType::REL_HWHEEL);
 
         let mouse = VirtualDeviceBuilder::new()?
             .name("mm-warp Mouse")
             .with_keys(&mouse_keys)?
             .with_absolute_axis(&UinputAbsSetup::new(AbsoluteAxisType::ABS_X, abs_info))?
             .with_absolute_axis(&UinputAbsSetup::new(AbsoluteAxisType::ABS_Y, abs_info))?
+            .with_relative_axes(&rel_axes)?
             .build()
             .context("Failed to build virtual mouse")?;
 
         Ok(Self { keyboard, mouse })
     }
 
-    /// Linux KEY_MAX — keycodes above this are not valid evdev keys.
-    const KEY_MAX: u32 = 767;
-
-    /// Keys that trigger system power state changes. Allowed but logged.
-    const DANGEROUS_KEYS: &[u32] = &[
-        116, // KEY_POWER
-        142, // KEY_SLEEP
-        143, // KEY_WAKEUP
-        205, // KEY_SUSPEND
-    ];
+    /// Dispatch any InputEvent to the appropriate virtual device.
+    /// `capture_width` and `capture_height` are used to normalize mouse
+    /// coordinates from buffer-space pixels to the 0-32767 absolute range.
+    pub fn inject(&mut self, event: &mm_warp_common::InputEvent, capture_width: u32, capture_height: u32) -> Result<()> {
+        match event {
+            mm_warp_common::InputEvent::KeyPress { key } => self.inject_key(*key, true),
+            mm_warp_common::InputEvent::KeyRelease { key } => self.inject_key(*key, false),
+            mm_warp_common::InputEvent::MouseMove { x, y } => self.inject_mouse_move(*x, *y, capture_width, capture_height),
+            mm_warp_common::InputEvent::MouseButton { button, pressed } => self.inject_mouse_button(*button, *pressed),
+            mm_warp_common::InputEvent::MouseScroll { axis, value } => self.inject_mouse_scroll(*axis, *value),
+        }
+    }
 
     pub fn inject_key(&mut self, key: u32, pressed: bool) -> Result<()> {
-        if key > Self::KEY_MAX {
+        if key > Self::KEY_MAX as u32 {
             anyhow::bail!("Key code {} out of range (max {})", key, Self::KEY_MAX);
         }
+        // Block dangerous keys (power/sleep) from remote injection
         if Self::DANGEROUS_KEYS.contains(&key) {
-            tracing::warn!("Injecting dangerous key code {} (power/sleep related)", key);
+            tracing::warn!("Blocked dangerous key code {} (power/sleep related) from remote client", key);
+            return Ok(());
         }
         let key_obj = Key::new(key as u16);
         let value = if pressed { 1 } else { 0 };
@@ -69,11 +93,23 @@ impl InputInjector {
         Ok(())
     }
 
-    pub fn inject_mouse_move(&mut self, x: i32, y: i32) -> Result<()> {
-        // Map screen coordinates to 0..32767 absolute range.
-        // Compositor handles final mapping. Clamp to valid range.
-        let abs_x = x.max(0).min(32767);
-        let abs_y = y.max(0).min(32767);
+    /// Inject mouse move with coordinate normalization.
+    /// `x` and `y` are buffer-space pixel coordinates from the client.
+    /// These are mapped to the 0-32767 absolute axis range using the
+    /// capture resolution, so the cursor reaches all edges of the screen.
+    pub fn inject_mouse_move(&mut self, x: i32, y: i32, capture_width: u32, capture_height: u32) -> Result<()> {
+        // Map [0, width-1] → [0, 32767] so the cursor reaches all screen edges.
+        // Divide by (dimension - 1) to ensure the last pixel maps to 32767.
+        let abs_x = if capture_width > 1 {
+            (((x.max(0) as u64) * 32767) / (capture_width as u64 - 1)).min(32767) as i32
+        } else {
+            x.max(0).min(32767)
+        };
+        let abs_y = if capture_height > 1 {
+            (((y.max(0) as u64) * 32767) / (capture_height as u64 - 1)).min(32767) as i32
+        } else {
+            y.max(0).min(32767)
+        };
 
         self.mouse.emit(&[
             EvInputEvent::new(EventType::ABSOLUTE, AbsoluteAxisType::ABS_X.0, abs_x),
@@ -89,12 +125,35 @@ impl InputInjector {
             272 => Key::BTN_LEFT,
             273 => Key::BTN_RIGHT,
             274 => Key::BTN_MIDDLE,
-            _ => return Ok(()), // Ignore unknown buttons
+            275 => Key::BTN_SIDE,
+            276 => Key::BTN_EXTRA,
+            _ => {
+                tracing::debug!("Ignoring unrecognized mouse button code {}", button);
+                return Ok(());
+            }
         };
 
         let value = if pressed { 1 } else { 0 };
         self.mouse.emit(&[
             EvInputEvent::new(EventType::KEY, key.code(), value),
+            EvInputEvent::new(EventType::SYNCHRONIZATION, 0, 0),
+        ])?;
+        Ok(())
+    }
+
+    pub fn inject_mouse_scroll(&mut self, axis: u32, value: i32) -> Result<()> {
+        // axis: 0 = vertical (REL_WHEEL), 1 = horizontal (REL_HWHEEL)
+        let rel_axis = match axis {
+            0 => RelativeAxisType::REL_WHEEL,
+            1 => RelativeAxisType::REL_HWHEEL,
+            _ => {
+                tracing::debug!("Ignoring unrecognized scroll axis {}", axis);
+                return Ok(());
+            }
+        };
+
+        self.mouse.emit(&[
+            EvInputEvent::new(EventType::RELATIVE, rel_axis.0, value),
             EvInputEvent::new(EventType::SYNCHRONIZATION, 0, 0),
         ])?;
         Ok(())

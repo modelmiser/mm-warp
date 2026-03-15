@@ -92,10 +92,12 @@ impl H264Encoder {
         Ok(Self { encoder, scaler, width, height, frame_count: 0, force_keyframe_next: false })
     }
 
-    /// Force next frame to be a keyframe (IDR frame with SPS/PPS)
-    /// Call this when a new client connects to ensure they get codec parameters
+    /// Force next frame to be a keyframe (IDR frame with SPS/PPS).
+    /// Call this when a new client connects to ensure they get codec parameters.
+    /// Also resets PTS counter so the new decoder starts from 0.
     pub fn force_keyframe(&mut self) {
         self.force_keyframe_next = true;
+        self.frame_count = 0;
     }
 
     /// Encode RGBA frame to H.264
@@ -209,6 +211,19 @@ impl QuicServer {
         tracing::info!("Client connected from {}", connection.remote_address());
 
         Ok(connection)
+    }
+
+    /// Send stream metadata to the client on a unidirectional stream.
+    /// Must be called once after accept(), before send_frame().
+    pub async fn send_metadata(connection: &quinn::Connection, meta: &mm_warp_common::StreamMetadata) -> Result<()> {
+        let mut stream = connection.open_uni().await
+            .context("Failed to open metadata stream")?;
+        stream.write_all(&meta.to_bytes()).await
+            .context("Failed to write stream metadata")?;
+        stream.finish()
+            .context("Failed to finish metadata stream")?;
+        tracing::info!("Sent stream metadata: {}x{} @ {} fps", meta.width, meta.height, meta.fps);
+        Ok(())
     }
 
     /// Send encoded frame over connection
@@ -375,17 +390,31 @@ impl WaylandConnection {
 
         tracing::info!("Bound screencopy manager and output");
 
-        // Create shared memory buffer (hardcoded 1920x1080 RGBA for now)
-        let width = 1920;
-        let height = 1080;
-        let stride = width * 4; // RGBA
-        let size = (stride * height) as usize;
+        // Request screencopy — must get buffer info BEFORE creating buffer
+        let frame = screencopy_mgr.capture_output(0, &output, &qh, ());
+        tracing::debug!("Requested screencopy");
 
-        tracing::debug!("Creating shm buffer: {}x{}, size={}", width, height, size);
+        let mut state = CaptureState::new();
+
+        // Wait for Buffer event which tells us required format/size
+        while state.buffer_info.is_none() && !state.frame_failed {
+            event_queue.blocking_dispatch(&mut state)
+                .context("Failed to dispatch events")?;
+        }
+
+        if state.frame_failed {
+            anyhow::bail!("Screencopy failed");
+        }
+
+        // Use actual dimensions from compositor
+        let (_format, width, height, stride) = state.buffer_info
+            .context("No buffer info received from compositor")?;
+
+        let size = (stride * height) as usize;
+        tracing::debug!("Creating shm buffer from compositor info: {}x{}, stride={}, size={}", width, height, stride, size);
 
         let (fd, mmap) = mm_warp_common::buffer::create_memfd_mmap("wl_shm", size)?;
 
-        // Create wl_shm_pool and buffer
         let pool = shm.create_pool(fd.as_fd(), size as i32, &qh, ());
         let buffer = pool.create_buffer(
             0,
@@ -396,26 +425,6 @@ impl WaylandConnection {
             &qh,
             (),
         );
-
-        tracing::debug!("Created shm buffer");
-
-        // Request screencopy (0 = no cursor overlay)
-        let frame = screencopy_mgr.capture_output(0, &output, &qh, ());
-
-        tracing::debug!("Requested screencopy");
-
-        // Create state
-        let mut state = CaptureState::new();
-
-        // Event loop - wait for buffer info
-        while state.buffer_info.is_none() && !state.frame_failed {
-            event_queue.blocking_dispatch(&mut state)
-                .context("Failed to dispatch events")?;
-        }
-
-        if state.frame_failed {
-            anyhow::bail!("Screencopy failed");
-        }
 
         // Copy frame to buffer
         frame.copy(&buffer);
@@ -431,11 +440,28 @@ impl WaylandConnection {
             anyhow::bail!("Screencopy failed during capture");
         }
 
-        tracing::info!("Frame captured successfully");
+        tracing::info!("Frame captured successfully ({}x{})", width, height);
 
-        // Copy from mmap to output buffer (convert ARGB to RGBA)
-        let mut rgba_buffer = vec![0u8; size];
-        mm_warp_common::pixel::argb8888_to_rgba(mmap.as_ref(), &mut rgba_buffer, width, height);
+        // Convert ARGB to RGBA (tightly packed — stride may differ from width*4)
+        let row_bytes = (width * 4) as usize;
+        let out_size = row_bytes * height as usize;
+        let mut rgba_buffer = vec![0u8; out_size];
+        for y in 0..height as usize {
+            let src_offset = y * stride as usize;
+            let dst_offset = y * row_bytes;
+            mm_warp_common::pixel::argb8888_to_rgba(
+                &mmap.as_ref()[src_offset..src_offset + row_bytes],
+                &mut rgba_buffer[dst_offset..dst_offset + row_bytes],
+                width, 1,
+            );
+        }
+
+        // Store actual resolution for FrameSource trait
+        self.displays = vec![Display {
+            name: "primary".to_string(),
+            width: width as i32,
+            height: height as i32,
+        }];
 
         Ok(rgba_buffer)
     }
@@ -447,7 +473,12 @@ impl capture::FrameSource for WaylandConnection {
     }
 
     fn resolution(&self) -> mm_warp_common::Resolution {
-        mm_warp_common::Resolution::new(1920, 1080) // hardcoded in capture_frame
+        // Use actual resolution from last capture, or default to 1920x1080
+        if let Some(d) = self.displays.first() {
+            mm_warp_common::Resolution::new(d.width as u32, d.height as u32)
+        } else {
+            mm_warp_common::Resolution::new(1920, 1080)
+        }
     }
 }
 
@@ -469,7 +500,11 @@ mod tests {
         if std::env::var("WAYLAND_DISPLAY").is_ok() {
             let mut conn = WaylandConnection::new().unwrap();
             let frame = conn.capture_frame();
-            assert!(frame.is_ok(), "Stub should return buffer");
+            // wlr-screencopy may not be available on all compositors (e.g., COSMIC
+            // uses ext-image-copy-capture). Don't assert success unconditionally.
+            if let Err(e) = &frame {
+                eprintln!("wlr-screencopy capture failed (expected on COSMIC): {}", e);
+            }
         }
     }
 

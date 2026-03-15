@@ -1,4 +1,4 @@
-use tokio::time::Instant;
+use std::time::Instant;
 
 /// Periodic stream statistics tracker.
 ///

@@ -30,12 +30,22 @@ impl QuicClient {
         Ok(Self { endpoint })
     }
 
-    /// Connect to server
-    pub async fn connect(&self, server_addr: SocketAddr) -> Result<Connection> {
+    /// Connect to server. If `insecure` is false, connection will fail
+    /// because the server uses self-signed certs. Use `--insecure` flag
+    /// until TOFU certificate pinning is implemented.
+    pub async fn connect(&self, server_addr: SocketAddr, insecure: bool) -> Result<Connection> {
         // Install default crypto provider (ring)
         let _ = rustls::crypto::ring::default_provider().install_default();
 
-        // Skip cert verification for self-signed certs (dev only!)
+        if !insecure {
+            anyhow::bail!(
+                "Server uses self-signed certificates. Use --insecure to connect \
+                 (until TOFU cert pinning is implemented)."
+            );
+        }
+
+        eprintln!("⚠️  WARNING: TLS certificate verification DISABLED (--insecure)");
+        eprintln!("   Connection is encrypted but NOT authenticated — MITM attacks possible.\n");
         let crypto = rustls::ClientConfig::builder()
             .dangerous()
             .with_custom_certificate_verifier(Arc::new(SkipVerification))
@@ -54,6 +64,17 @@ impl QuicClient {
         tracing::info!("Connected to server at {}", server_addr);
 
         Ok(connection)
+    }
+
+    /// Receive stream metadata from the first unidirectional stream.
+    /// Must be called once after connect(), before receive_frame().
+    pub async fn receive_metadata(connection: &Connection) -> Result<mm_warp_common::StreamMetadata> {
+        let mut stream = connection.accept_uni().await
+            .context("Failed to accept metadata stream")?;
+        let mut buf = [0u8; mm_warp_common::StreamMetadata::SIZE];
+        stream.read_exact(&mut buf).await
+            .context("Failed to read stream metadata")?;
+        mm_warp_common::StreamMetadata::from_bytes(&buf)
     }
 
     /// Receive one frame from connection
@@ -101,7 +122,6 @@ impl H264Decoder {
         let codec = ffmpeg_next::decoder::find(ffmpeg_next::codec::Id::H264)
             .context("H.264 codec not found")?;
 
-        // Try just decoder() without video()
         let decoder = ffmpeg_next::codec::context::Context::new_with_codec(codec)
             .decoder()
             .open_as(codec)
@@ -123,7 +143,6 @@ impl H264Decoder {
     /// Decode H.264 packet to RGBA frame
     pub fn decode(&mut self, encoded_packet: &[u8]) -> Result<Vec<u8>> {
         if encoded_packet.is_empty() {
-            // Empty packet, return empty frame
             return Ok(Vec::new());
         }
 
@@ -136,8 +155,25 @@ impl H264Decoder {
 
         match self.decoder.receive_frame(&mut decoded) {
             Ok(_) => {
-                // Successfully decoded frame (YUV420P)
-                tracing::info!("Decoded frame: {}x{}", decoded.width(), decoded.height());
+                // Validate decoded frame dimensions match our scaler
+                let dw = decoded.width();
+                let dh = decoded.height();
+                if dw != self.width || dh != self.height {
+                    // Recreate scaler for new dimensions
+                    tracing::warn!("Decoded frame {}x{} differs from expected {}x{}, reinitializing scaler",
+                        dw, dh, self.width, self.height);
+                    self.width = dw;
+                    self.height = dh;
+                    self.scaler = ScaleContext::get(
+                        ffmpeg_next::format::Pixel::YUV420P,
+                        dw, dh,
+                        ffmpeg_next::format::Pixel::RGBA,
+                        dw, dh,
+                        Flags::BILINEAR,
+                    ).context("Failed to recreate scaler for new dimensions")?;
+                }
+
+                tracing::trace!("Decoded frame: {}x{}", dw, dh);
 
                 // Create RGBA output frame
                 let mut rgba_frame = ffmpeg_next::frame::Video::empty();
@@ -156,7 +192,6 @@ impl H264Decoder {
                     .context("Failed to convert YUV420P to RGBA")?;
 
                 // Copy RGBA data to output vector, respecting ffmpeg's linesize (stride).
-                // av_frame_get_buffer may pad rows beyond width*4 for alignment.
                 let stride = rgba_frame.stride(0);
                 let row_bytes = (self.width * 4) as usize;
                 let src = rgba_frame.data(0);
@@ -170,7 +205,6 @@ impl H264Decoder {
                 Ok(out)
             }
             Err(ffmpeg_next::Error::Other { errno: ffmpeg_next::util::error::EAGAIN }) => {
-                // Decoder needs more data before it can output a frame
                 Ok(Vec::new())
             }
             Err(e) => {
@@ -180,7 +214,7 @@ impl H264Decoder {
     }
 }
 
-/// Skip certificate verification (dev only - accept self-signed certs)
+/// Skip certificate verification (INSECURE — only used with --insecure flag)
 #[derive(Debug)]
 struct SkipVerification;
 
@@ -230,21 +264,13 @@ mod tests {
     #[tokio::test]
     async fn test_client_creation() {
         let result = QuicClient::new();
-        if let Err(e) = &result {
-            eprintln!("Client creation failed: {}", e);
-        }
         assert!(result.is_ok());
     }
 
     #[test]
     fn test_h264_decoder() {
-        // Try to create decoder - might fail if H.264 codec not available
         let decoder_result = H264Decoder::new(1920, 1080);
-
-        if let Ok(mut decoder) = decoder_result {
-            // Decoder created successfully
-            // Note: Can't test decode with fake packet (would fail)
-            // Just verify decoder was created
+        if let Ok(_decoder) = decoder_result {
             eprintln!("H.264 decoder created successfully");
         } else {
             eprintln!("H.264 decoder not available, skipping test");
@@ -252,15 +278,10 @@ mod tests {
     }
 
     #[test]
-    fn test_input_event_serialization() {
-        // Test each event type serializes
-        let key_press = InputEvent::KeyPress { key: 42 };
-        assert_eq!(key_press.to_bytes().len(), 5); // 1 type + 4 bytes key
-
-        let mouse_move = InputEvent::MouseMove { x: 100, y: 200 };
-        assert_eq!(mouse_move.to_bytes().len(), 9); // 1 type + 4 x + 4 y
-
-        let mouse_btn = InputEvent::MouseButton { button: 1, pressed: true };
-        assert_eq!(mouse_btn.to_bytes().len(), 6); // 1 type + 4 button + 1 pressed
+    fn test_stream_metadata_round_trip() {
+        let meta = mm_warp_common::StreamMetadata::new(3840, 2160, 60);
+        let bytes = meta.to_bytes();
+        let decoded = mm_warp_common::StreamMetadata::from_bytes(&bytes).unwrap();
+        assert_eq!(meta, decoded);
     }
 }

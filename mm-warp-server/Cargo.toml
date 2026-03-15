@@ -2,6 +2,12 @@
 name = "mm-warp-server"
 version = "0.1.0"
 edition = "2021"
+license = "GPL-3.0-or-later"
+description = "mm-warp remote desktop server — Wayland screen capture over QUIC"
+
+[[bin]]
+name = "mm-warp-server"
+path = "src/bin/server.rs"
 
 [dependencies]
 mm-warp-common = { path = "../mm-warp-common" }

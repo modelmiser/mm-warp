@@ -290,7 +290,7 @@ impl Dispatch<wl_output::WlOutput, ()> for CaptureState {
     fn event(state: &mut Self, _: &wl_output::WlOutput, event: wl_output::Event, _: &(), _: &Connection, _: &QueueHandle<Self>) {
         if let wl_output::Event::Mode { flags, width, height, refresh } = event {
             use wayland_client::WEnum;
-            let refresh_hz = (refresh / 1000) as u32; // mHz to Hz
+            let refresh_hz = ((refresh + 500) / 1000) as u32; // mHz to Hz (rounded)
 
             let is_current = match flags {
                 WEnum::Value(f) => f.contains(wl_output::Mode::Current),

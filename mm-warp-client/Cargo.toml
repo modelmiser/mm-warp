@@ -2,6 +2,12 @@
 name = "mm-warp-client"
 version = "0.1.0"
 edition = "2021"
+license = "GPL-3.0-or-later"
+description = "mm-warp remote desktop client — Wayland display with input forwarding"
+
+[[bin]]
+name = "mm-warp-client"
+path = "src/bin/client.rs"
 
 [dependencies]
 mm-warp-common = { path = "../mm-warp-common" }

@@ -16,7 +16,7 @@ async fn main() -> Result<()> {
     println!("Connecting to {}...", server_addr);
 
     let client = QuicClient::new()?;
-    let connection = client.connect(server_addr).await?;
+    let connection = client.connect(server_addr, true).await?;
     println!("✅ Connected via QUIC\n");
 
     // Receive frames

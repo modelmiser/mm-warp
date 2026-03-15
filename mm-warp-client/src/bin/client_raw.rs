@@ -12,7 +12,7 @@ async fn main() -> Result<()> {
 
     // Connect to server
     println!("Connecting to server at 127.0.0.1:4433...");
-    let connection = client.connect("127.0.0.1:4433".parse().unwrap()).await?;
+    let connection = client.connect("127.0.0.1:4433".parse().unwrap(), true).await?;
     println!("✅ Connected\n");
 
     // Receive raw frames

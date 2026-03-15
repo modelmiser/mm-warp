@@ -37,13 +37,31 @@ A modern remote desktop solution built on Wayland protocols, QUIC networking, an
 
 ## Quick Start
 
-### 1. Build
+### 1. Install Build Dependencies
+
+**Debian/Ubuntu/Pop!_OS:**
+```bash
+sudo apt install libavcodec-dev libavformat-dev libswscale-dev libavutil-dev \
+                 libwayland-dev pkg-config clang
+```
+
+**Fedora:**
+```bash
+sudo dnf install ffmpeg-devel wayland-devel clang pkg-config
+```
+
+**Arch:**
+```bash
+sudo pacman -S ffmpeg wayland clang pkg-config
+```
+
+### 2. Build
 
 ```bash
 cargo build --release
 ```
 
-### 2. Setup uinput Access (One-time)
+### 3. Setup uinput Access (One-time)
 
 **Option A - Automated (Recommended):**
 ```bash
@@ -54,24 +72,32 @@ cargo build --release
 **Option B - Manual:**
 ```bash
 # Preserve environment when using sudo
-sudo -E ./target/release/server
+sudo -E ./target/release/mm-warp-server
 ```
 
 See [Troubleshooting](#troubleshooting) below for details.
 
-### 3. Run
+### 4. Run
 
 **Terminal 1 (Server):**
 ```bash
-./target/release/server
-# Waits for client connections...
+# Local testing (localhost only):
+./target/release/mm-warp-server
+
+# Remote desktop (listen on all interfaces — ⚠️ no authentication yet):
+./target/release/mm-warp-server --listen 0.0.0.0:4433
 ```
 
 **Terminal 2 (Client):**
 ```bash
-./target/release/client
-# Connects and displays your desktop!
+# Connect (--insecure required until TOFU cert pinning is implemented):
+./target/release/mm-warp-client --insecure
+
+# Connect to remote server:
+./target/release/mm-warp-client --insecure --server 192.168.1.100:4433
 ```
+
+The client auto-detects resolution from the server — no `--resolution` flag needed.
 
 **What you'll see:**
 - Client window shows your COSMIC desktop at 4K
@@ -154,7 +180,7 @@ cargo run --bin client_raw  # Terminal 2
 
 ### "Could not find wayland compositor" when using sudo
 
-**Problem:** Running `sudo ./target/release/server` fails with:
+**Problem:** Running `sudo ./target/release/mm-warp-server` fails with:
 ```
 Error: Failed to connect to Wayland (ext-image-copy-capture)
 Caused by: Could not find wayland compositor
@@ -166,7 +192,7 @@ Caused by: Could not find wayland compositor
 
 **Option 1 - Quick Fix (Preserve Environment):**
 ```bash
-sudo -E ./target/release/server
+sudo -E ./target/release/mm-warp-server
 ```
 
 **Option 2 - Permanent Fix (No sudo needed):**
@@ -176,7 +202,7 @@ sudo -E ./target/release/server
 
 # Log out and back in (for group membership to take effect)
 # Then run without sudo:
-./target/release/server
+./target/release/mm-warp-server
 ```
 
 **What the setup script does:**
@@ -211,7 +237,7 @@ ls -l /dev/uinput
 **Check:**
 1. Is server running? Look for: `✅ Server listening`
 2. Firewall blocking port 4433? (shouldn't be for localhost)
-3. Try: `netstat -tlnp | grep 4433` to verify server is listening
+3. Try: `ss -ulnp | grep 4433` to verify server is listening (QUIC uses UDP)
 
 **Client should auto-retry every 2 seconds** with message:
 ```
