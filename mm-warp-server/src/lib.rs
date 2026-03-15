@@ -117,8 +117,17 @@ impl H264Encoder {
             anyhow::bail!("av_frame_get_buffer failed for RGBA frame: error code {}", ret);
         }
 
-        // Copy RGBA data to source frame
-        rgba_src_frame.data_mut(0).copy_from_slice(rgba_frame);
+        // Copy RGBA data to source frame, respecting ffmpeg's linesize (stride).
+        // av_frame_get_buffer may pad rows beyond width*4 for alignment.
+        let stride = rgba_src_frame.stride(0);
+        let row_bytes = (self.width * 4) as usize;
+        let dst = rgba_src_frame.data_mut(0);
+        for y in 0..self.height as usize {
+            let src_offset = y * row_bytes;
+            let dst_offset = y * stride;
+            dst[dst_offset..dst_offset + row_bytes]
+                .copy_from_slice(&rgba_frame[src_offset..src_offset + row_bytes]);
+        }
 
         // Create YUV destination frame
         let mut frame = ffmpeg_next::frame::Video::empty();

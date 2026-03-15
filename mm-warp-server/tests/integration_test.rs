@@ -71,13 +71,12 @@ fn test_encode_decode_round_trip() -> Result<()> {
 
     assert!(!decoded.is_empty(), "Decoder should produce at least one frame after 5 packets");
 
-    // Decoded frame should match the expected size (width * height * 4 RGBA).
-    // Note: ffmpeg RGBA frames may have padding (linesize > width*4), so the
-    // decoded slice can be larger. Just verify it is at least the expected size.
-    let expected_min = (width * height * 4) as usize;
-    assert!(
-        decoded.len() >= expected_min,
-        "Decoded frame too small: {} < {}", decoded.len(), expected_min,
+    // Decoded frame must be exactly width * height * 4 RGBA bytes.
+    // The decoder strips ffmpeg's linesize padding during row-by-row copy.
+    let expected = (width * height * 4) as usize;
+    assert_eq!(
+        decoded.len(), expected,
+        "Decoded frame size mismatch: got {}, expected {}", decoded.len(), expected,
     );
 
     Ok(())

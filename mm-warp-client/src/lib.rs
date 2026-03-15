@@ -155,9 +155,19 @@ impl H264Decoder {
                 self.scaler.run(&decoded, &mut rgba_frame)
                     .context("Failed to convert YUV420P to RGBA")?;
 
-                // Copy RGBA data to output vector
-                let rgba_data = rgba_frame.data(0);
-                Ok(rgba_data.to_vec())
+                // Copy RGBA data to output vector, respecting ffmpeg's linesize (stride).
+                // av_frame_get_buffer may pad rows beyond width*4 for alignment.
+                let stride = rgba_frame.stride(0);
+                let row_bytes = (self.width * 4) as usize;
+                let src = rgba_frame.data(0);
+                let mut out = vec![0u8; (self.width * self.height * 4) as usize];
+                for y in 0..self.height as usize {
+                    let src_offset = y * stride;
+                    let dst_offset = y * row_bytes;
+                    out[dst_offset..dst_offset + row_bytes]
+                        .copy_from_slice(&src[src_offset..src_offset + row_bytes]);
+                }
+                Ok(out)
             }
             Err(ffmpeg_next::Error::Other { errno: ffmpeg_next::util::error::EAGAIN }) => {
                 // Decoder needs more data before it can output a frame
