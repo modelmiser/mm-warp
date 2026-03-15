@@ -66,3 +66,47 @@ impl StreamStats {
         self.bytes = 0;
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn total_frames_accumulates() {
+        let mut stats = StreamStats::new();
+        assert_eq!(stats.total_frames(), 0);
+        stats.record_frame(1000);
+        stats.record_frame(2000);
+        stats.record_frame(3000);
+        assert_eq!(stats.total_frames(), 3);
+    }
+
+    #[test]
+    fn report_not_due_before_one_second() {
+        let mut stats = StreamStats::new();
+        stats.record_frame(1000);
+        // Immediately after creation, less than 1 second has elapsed
+        assert!(stats.report_if_due("TEST", None).is_none());
+    }
+
+    #[test]
+    fn reset_clears_interval_counters() {
+        let mut stats = StreamStats::new();
+        stats.record_frame(5000);
+        stats.record_frame(5000);
+        stats.reset();
+        // Total frames persists across resets
+        assert_eq!(stats.total_frames(), 2);
+    }
+
+    #[test]
+    fn zero_frames_no_division_error() {
+        let mut stats = StreamStats::new();
+        // Force elapsed > 1s by resetting start to past
+        stats.start = Instant::now() - std::time::Duration::from_secs(2);
+        // No frames recorded — should not panic on division
+        let report = stats.report_if_due("TEST", Some(60));
+        assert!(report.is_some());
+        assert!(report.unwrap().contains("Avg: 0KB"));
+    }
+}

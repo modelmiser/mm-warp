@@ -12,14 +12,32 @@ impl InputInjector {
     /// Linux KEY_MAX — keycodes above this are not valid evdev keys.
     const KEY_MAX: u16 = 767;
 
-    /// Keys that trigger system power/state changes. Blocked from remote injection.
-    const DANGEROUS_KEYS: &[u32] = &[
-        99,  // KEY_SYSRQ (Alt+SysRq+B = instant reboot)
-        116, // KEY_POWER
-        142, // KEY_SLEEP
-        143, // KEY_WAKEUP
-        205, // KEY_SUSPEND
-    ];
+    /// Safe key code ranges for remote injection (allowlist approach).
+    /// Only standard keyboard keys — no system power, RF kill, or device toggles.
+    fn is_safe_key(key: u32) -> bool {
+        matches!(key,
+            // Standard keys: ESC through backslash (1-43)
+            1..=43 |
+            // Enter through grave (28, 44-53)
+            44..=53 |
+            // Shift, ctrl, alt, space, caps, F1-F10 (54-68)
+            54..=68 |
+            // Numlock through keypad-dot (69-83)
+            69..=83 |
+            // F11-F12 (87-88)
+            87..=88 |
+            // Keypad enter, right ctrl (96-97)
+            96..=97 |
+            // Right alt, home/up/pgup/left/right/end/down/pgdn/ins/del (100-111)
+            100..=111 |
+            // Pause (119)
+            119 |
+            // Left/right meta (125-126)
+            125..=126 |
+            // F13-F24 (183-194) — extended function keys
+            183..=194
+        )
+    }
 
     pub fn new() -> Result<Self> {
         // Keyboard: register all valid keys (0..=KEY_MAX)
@@ -79,9 +97,9 @@ impl InputInjector {
         if key > Self::KEY_MAX as u32 {
             anyhow::bail!("Key code {} out of range (max {})", key, Self::KEY_MAX);
         }
-        // Block dangerous keys (power/sleep) from remote injection
-        if Self::DANGEROUS_KEYS.contains(&key) {
-            tracing::warn!("Blocked dangerous key code {} (power/sleep related) from remote client", key);
+        // Allowlist: only standard keyboard keys, no system power/RF/device toggles
+        if !Self::is_safe_key(key) {
+            tracing::debug!("Blocked non-keyboard key code {} from remote client", key);
             return Ok(());
         }
         let key_obj = Key::new(key as u16);

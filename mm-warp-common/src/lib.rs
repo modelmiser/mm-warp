@@ -2,7 +2,6 @@ pub mod input_event;
 pub mod pixel;
 pub mod buffer;
 pub mod stats;
-pub mod error;
 
 /// Generate empty Dispatch impls for Wayland protocol objects that don't
 /// emit events we care about. Eliminates boilerplate across capture/display files.
@@ -27,7 +26,6 @@ macro_rules! wayland_dispatch_noop {
 }
 
 pub use input_event::InputEvent;
-pub use error::WarpError;
 
 /// Pixel dimensions propagated from capture → encoder → client.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -59,8 +57,6 @@ impl std::fmt::Display for Resolution {
 }
 
 /// Stream metadata sent by server on the first unidirectional stream.
-/// Client reads this before entering the frame receive loop to auto-configure
-/// decoder resolution and display window size.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct StreamMetadata {
     pub width: u32,
@@ -99,5 +95,90 @@ impl StreamMetadata {
         let fps = u32::from_be_bytes(bytes[9..13].try_into()
             .map_err(|_| anyhow::anyhow!("StreamMetadata: invalid fps bytes"))?);
         Ok(Self { width, height, fps })
+    }
+}
+
+/// Get the mm-warp config directory (~/.config/mm-warp/).
+pub fn config_dir() -> std::path::PathBuf {
+    std::env::var("XDG_CONFIG_HOME")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|_| {
+            let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
+            std::path::PathBuf::from(home).join(".config")
+        })
+        .join("mm-warp")
+}
+
+/// Compute SHA-256 fingerprint of DER bytes as hex string.
+pub fn cert_fingerprint(der: &[u8]) -> String {
+    use sha2::{Sha256, Digest};
+    let hash = Sha256::digest(der);
+    hash.iter().map(|b| format!("{:02x}", b)).collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn metadata_round_trip() {
+        let meta = StreamMetadata::new(3840, 2160, 60);
+        let bytes = meta.to_bytes();
+        let decoded = StreamMetadata::from_bytes(&bytes).unwrap();
+        assert_eq!(meta, decoded);
+    }
+
+    #[test]
+    fn metadata_too_short() {
+        let result = StreamMetadata::from_bytes(&[1, 0, 0, 0]);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("too short"));
+    }
+
+    #[test]
+    fn metadata_wrong_version() {
+        let result = StreamMetadata::from_bytes(&[0; 13]);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("Unknown"));
+    }
+
+    #[test]
+    fn metadata_future_version() {
+        let result = StreamMetadata::from_bytes(&[255; 13]);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn resolution_buffer_size_4k() {
+        let res = Resolution::new(3840, 2160);
+        assert_eq!(res.stride(), 15360);
+        assert_eq!(res.buffer_size(), 33_177_600);
+    }
+
+    #[test]
+    fn resolution_buffer_size_max() {
+        // 16384x16384 = max allowed by client validation
+        let res = Resolution::new(16384, 16384);
+        assert_eq!(res.buffer_size(), 1_073_741_824); // ~1GB
+    }
+
+    #[test]
+    fn cert_fingerprint_length() {
+        let fp = cert_fingerprint(b"test cert data");
+        assert_eq!(fp.len(), 64); // SHA-256 = 32 bytes = 64 hex chars
+    }
+
+    #[test]
+    fn cert_fingerprint_deterministic() {
+        let fp1 = cert_fingerprint(b"same data");
+        let fp2 = cert_fingerprint(b"same data");
+        assert_eq!(fp1, fp2);
+    }
+
+    #[test]
+    fn cert_fingerprint_different() {
+        let fp1 = cert_fingerprint(b"data a");
+        let fp2 = cert_fingerprint(b"data b");
+        assert_ne!(fp1, fp2);
     }
 }

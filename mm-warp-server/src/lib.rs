@@ -1,7 +1,6 @@
 use anyhow::{Context, Result};
 use std::net::SocketAddr;
 use std::os::fd::AsFd;
-use std::path::PathBuf;
 use quinn::{Endpoint, ServerConfig};
 use rustls::pki_types::{CertificateDer, PrivateKeyDer};
 use ffmpeg_next::software::scaling::{context::Context as ScaleContext, flag::Flags};
@@ -179,23 +178,7 @@ pub struct QuicServer {
     endpoint: Endpoint,
 }
 
-/// Compute SHA-256 fingerprint of DER bytes, returned as hex string.
-pub fn cert_fingerprint(der: &[u8]) -> String {
-    use sha2::{Sha256, Digest};
-    let hash = Sha256::digest(der);
-    hash.iter().map(|b| format!("{:02x}", b)).collect()
-}
-
-/// Get the mm-warp config directory (~/.config/mm-warp/).
-fn config_dir() -> PathBuf {
-    std::env::var("XDG_CONFIG_HOME")
-        .map(PathBuf::from)
-        .unwrap_or_else(|_| {
-            let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
-            PathBuf::from(home).join(".config")
-        })
-        .join("mm-warp")
-}
+use mm_warp_common::{config_dir, cert_fingerprint};
 
 /// Load existing server cert/key from disk, or generate and persist a new one.
 /// Returns (cert_der, key_der, fingerprint).

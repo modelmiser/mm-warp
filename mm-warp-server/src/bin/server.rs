@@ -7,11 +7,16 @@ use tokio::sync::{mpsc, watch};
 use tokio::task::JoinHandle;
 
 #[derive(Parser)]
-#[command(name = "mm-warp-server", about = "mm-warp remote desktop server")]
+#[command(name = "mm-warp-server", version, about = "mm-warp remote desktop server")]
 struct Args {
     /// Listen address
     #[arg(short, long, default_value = "127.0.0.1:4433")]
     listen: String,
+
+    /// Require clients to provide this PIN before connecting.
+    /// Strongly recommended when listening on non-loopback addresses.
+    #[arg(long)]
+    pin: Option<String>,
 }
 
 #[tokio::main]
@@ -25,9 +30,13 @@ async fn main() -> Result<()> {
     let listen_addr: std::net::SocketAddr = args.listen.parse()
         .map_err(|e| anyhow::anyhow!("Invalid listen address '{}': {}", args.listen, e))?;
     if !listen_addr.ip().is_loopback() {
-        eprintln!("⚠️  WARNING: Binding to non-loopback address {}.", listen_addr);
-        eprintln!("   Anyone on the network can view your screen and control your input.");
-        eprintln!("   No authentication is configured. Use only on trusted networks.\n");
+        if args.pin.is_none() {
+            eprintln!("⚠️  WARNING: Binding to non-loopback address {} WITHOUT --pin.", listen_addr);
+            eprintln!("   Anyone on the network can view your screen and control your input.");
+            eprintln!("   Use --pin <SECRET> to require authentication.\n");
+        } else {
+            println!("🔑 PIN authentication enabled for non-loopback address {}.", listen_addr);
+        }
     }
 
     // Create screen capture — try ext-image-copy-capture first, fall back to wlr-screencopy
@@ -97,6 +106,45 @@ async fn main() -> Result<()> {
         // Cancel previous input receiver task if still running
         if let Some(handle) = input_task.take() {
             handle.abort();
+        }
+
+        // PIN authentication (if enabled)
+        if let Some(ref pin) = args.pin {
+            use tokio::time::timeout;
+            let pin_result = timeout(std::time::Duration::from_secs(10), async {
+                let (mut send, mut recv) = connection.accept_bi().await
+                    .map_err(|e| anyhow::anyhow!("PIN: no bidi stream from client: {}", e))?;
+                let mut buf = vec![0u8; 256];
+                let n = recv.read(&mut buf).await
+                    .map_err(|e| anyhow::anyhow!("PIN: read failed: {}", e))?
+                    .unwrap_or(0);
+                let client_pin = std::str::from_utf8(&buf[..n]).unwrap_or("");
+                if client_pin == pin.as_str() {
+                    send.write_all(b"OK").await?;
+                    send.finish()?;
+                    Ok::<bool, anyhow::Error>(true)
+                } else {
+                    send.write_all(b"REJECT").await?;
+                    send.finish()?;
+                    Ok(false)
+                }
+            }).await;
+
+            match pin_result {
+                Ok(Ok(true)) => println!("   PIN verified"),
+                Ok(Ok(false)) => {
+                    eprintln!("⚠️  Wrong PIN from {} — disconnecting", connection.remote_address());
+                    continue;
+                }
+                Ok(Err(e)) => {
+                    eprintln!("⚠️  PIN exchange failed: {} — disconnecting", e);
+                    continue;
+                }
+                Err(_) => {
+                    eprintln!("⚠️  PIN timeout (10s) from {} — disconnecting", connection.remote_address());
+                    continue;
+                }
+            }
         }
 
         // Send stream metadata to client
@@ -320,7 +368,7 @@ async fn run_send_task(
 
     while let Some(encoded) = enc_rx.recv().await {
         if let Err(_) = QuicServer::send_frame(&connection, &encoded).await {
-            return Err(mm_warp_common::WarpError::ClientDisconnected.into());
+            return Err(anyhow::anyhow!("Client disconnected"));
         }
 
         let frame_size = encoded.len() as u64;

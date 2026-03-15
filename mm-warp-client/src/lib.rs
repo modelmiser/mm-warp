@@ -1,7 +1,7 @@
 use anyhow::{Context, Result};
 use quinn::{Connection, Endpoint};
 use std::net::SocketAddr;
-use std::path::PathBuf;
+use std::path::PathBuf; // used by TofuVerifier
 use ffmpeg_next::software::scaling::{context::Context as ScaleContext, flag::Flags};
 use std::sync::Arc;
 
@@ -15,23 +15,7 @@ pub use mm_warp_common::InputEvent;
 /// Maximum frame size the client will accept (50 MB).
 const MAX_FRAME_SIZE: usize = 50 * 1024 * 1024;
 
-/// Get the mm-warp config directory (~/.config/mm-warp/).
-fn config_dir() -> PathBuf {
-    std::env::var("XDG_CONFIG_HOME")
-        .map(PathBuf::from)
-        .unwrap_or_else(|_| {
-            let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
-            PathBuf::from(home).join(".config")
-        })
-        .join("mm-warp")
-}
-
-/// Compute SHA-256 fingerprint of DER bytes as hex string.
-fn cert_fingerprint(der: &[u8]) -> String {
-    use sha2::{Sha256, Digest};
-    let hash = Sha256::digest(der);
-    hash.iter().map(|b| format!("{:02x}", b)).collect()
-}
+use mm_warp_common::{config_dir, cert_fingerprint};
 
 /// QUIC client for receiving frames
 pub struct QuicClient {

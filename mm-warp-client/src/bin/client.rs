@@ -3,7 +3,7 @@ use anyhow::Result;
 use clap::Parser;
 
 #[derive(Parser)]
-#[command(name = "mm-warp-client", about = "mm-warp remote desktop client")]
+#[command(name = "mm-warp-client", version, about = "mm-warp remote desktop client")]
 struct Args {
     /// Server address to connect to
     #[arg(short, long, default_value = "127.0.0.1:4433")]
@@ -12,6 +12,10 @@ struct Args {
     /// Skip TLS certificate verification (INSECURE — allows MITM attacks)
     #[arg(long)]
     insecure: bool,
+
+    /// PIN for server authentication (must match server's --pin)
+    #[arg(long)]
+    pin: Option<String>,
 }
 
 #[tokio::main]
@@ -41,6 +45,22 @@ async fn main() -> Result<()> {
                 }
             }
         };
+
+        // PIN authentication (if server requires it)
+        if let Some(ref pin) = args.pin {
+            println!("Sending PIN...");
+            let (mut send, mut recv) = connection.open_bi().await
+                .map_err(|e| anyhow::anyhow!("PIN: failed to open bidi stream: {}", e))?;
+            send.write_all(pin.as_bytes()).await?;
+            send.finish()?;
+            let resp = recv.read_to_end(64).await?;
+            if resp != b"OK" {
+                eprintln!("⚠️  Server rejected PIN — check your --pin value");
+                tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
+                continue;
+            }
+            println!("✅ PIN accepted");
+        }
 
         // Receive stream metadata from server (resolution, fps)
         println!("Waiting for stream metadata...");

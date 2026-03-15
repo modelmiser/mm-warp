@@ -279,9 +279,17 @@ impl WaylandDisplay {
     }
 
     /// Poll and return any pending input events.
+    /// Uses dispatch_pending (non-blocking) — release events and input events
+    /// that arrived since the last call are processed without waiting.
     pub fn poll_input_events(&mut self) -> Vec<crate::InputEvent> {
         let _ = self.connection.flush();
-        let _ = self.event_queue.roundtrip(&mut self.state);
+        // Non-blocking: process events already in the queue (including wl_buffer.release)
+        let _ = self.event_queue.dispatch_pending(&mut self.state);
+        // Also read any new events from the socket without blocking
+        if let Some(guard) = self.event_queue.prepare_read() {
+            let _ = guard.read();
+            let _ = self.event_queue.dispatch_pending(&mut self.state);
+        }
 
         let mut events = self.pending_events.lock().unwrap();
         let result = events.clone();
