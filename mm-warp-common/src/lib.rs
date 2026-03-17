@@ -94,6 +94,12 @@ impl StreamMetadata {
             .map_err(|_| anyhow::anyhow!("StreamMetadata: invalid height bytes"))?);
         let fps = u32::from_be_bytes(bytes[9..13].try_into()
             .map_err(|_| anyhow::anyhow!("StreamMetadata: invalid fps bytes"))?);
+        if width == 0 || height == 0 {
+            anyhow::bail!("StreamMetadata: zero dimension ({}x{})", width, height);
+        }
+        if width > 16384 || height > 16384 {
+            anyhow::bail!("StreamMetadata: dimension too large ({}x{}, max 16384)", width, height);
+        }
         Ok(Self { width, height, fps })
     }
 }
@@ -147,6 +153,22 @@ mod tests {
     fn metadata_future_version() {
         let result = StreamMetadata::from_bytes(&[255; 13]);
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn metadata_zero_dimension() {
+        let meta = StreamMetadata::new(0, 1080, 60);
+        let result = StreamMetadata::from_bytes(&meta.to_bytes());
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("zero dimension"));
+    }
+
+    #[test]
+    fn metadata_too_large() {
+        let meta = StreamMetadata::new(16385, 1080, 60);
+        let result = StreamMetadata::from_bytes(&meta.to_bytes());
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("too large"));
     }
 
     #[test]

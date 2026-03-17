@@ -114,11 +114,9 @@ async fn main() -> Result<()> {
             let pin_result = timeout(std::time::Duration::from_secs(10), async {
                 let (mut send, mut recv) = connection.accept_bi().await
                     .map_err(|e| anyhow::anyhow!("PIN: no bidi stream from client: {}", e))?;
-                let mut buf = vec![0u8; 256];
-                let n = recv.read(&mut buf).await
-                    .map_err(|e| anyhow::anyhow!("PIN: read failed: {}", e))?
-                    .unwrap_or(0);
-                let client_pin = std::str::from_utf8(&buf[..n]).unwrap_or("");
+                let buf = recv.read_to_end(256).await
+                    .map_err(|e| anyhow::anyhow!("PIN: read failed: {}", e))?;
+                let client_pin = std::str::from_utf8(&buf).unwrap_or("");
                 if client_pin == pin.as_str() {
                     send.write_all(b"OK").await?;
                     send.finish()?;
@@ -134,14 +132,17 @@ async fn main() -> Result<()> {
                 Ok(Ok(true)) => println!("   PIN verified"),
                 Ok(Ok(false)) => {
                     eprintln!("⚠️  Wrong PIN from {} — disconnecting", connection.remote_address());
+                    connection.close(0u32.into(), b"wrong pin");
                     continue;
                 }
                 Ok(Err(e)) => {
                     eprintln!("⚠️  PIN exchange failed: {} — disconnecting", e);
+                    connection.close(0u32.into(), b"pin exchange error");
                     continue;
                 }
                 Err(_) => {
                     eprintln!("⚠️  PIN timeout (10s) from {} — disconnecting", connection.remote_address());
+                    connection.close(0u32.into(), b"pin timeout");
                     continue;
                 }
             }

@@ -49,15 +49,22 @@ async fn main() -> Result<()> {
         // PIN authentication (if server requires it)
         if let Some(ref pin) = args.pin {
             println!("Sending PIN...");
-            let (mut send, mut recv) = connection.open_bi().await
-                .map_err(|e| anyhow::anyhow!("PIN: failed to open bidi stream: {}", e))?;
-            send.write_all(pin.as_bytes()).await?;
-            send.finish()?;
-            let resp = recv.read_to_end(64).await?;
-            if resp != b"OK" {
-                anyhow::bail!("Server rejected PIN — check your --pin value");
+            let pin_result = tokio::time::timeout(std::time::Duration::from_secs(10), async {
+                let (mut send, mut recv) = connection.open_bi().await
+                    .map_err(|e| anyhow::anyhow!("PIN: failed to open bidi stream: {}", e))?;
+                send.write_all(pin.as_bytes()).await?;
+                send.finish()?;
+                let resp = recv.read_to_end(64).await?;
+                if resp != b"OK" {
+                    anyhow::bail!("Server rejected PIN — check your --pin value");
+                }
+                Ok::<(), anyhow::Error>(())
+            }).await;
+            match pin_result {
+                Ok(Ok(())) => println!("✅ PIN accepted"),
+                Ok(Err(e)) => return Err(e),
+                Err(_) => anyhow::bail!("PIN exchange timed out (10s) — server may not require --pin"),
             }
-            println!("✅ PIN accepted");
         }
 
         // Receive stream metadata from server (resolution, fps)

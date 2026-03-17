@@ -12,7 +12,6 @@ pub mod wayland_display;
 pub use mm_warp_common::input_event;
 pub use mm_warp_common::InputEvent;
 
-/// Maximum frame size the client will accept (50 MB).
 /// Maximum frame size the client will accept (5 MB).
 /// A 4K H.264 keyframe is typically 50-500KB; 5MB is generous headroom.
 const MAX_FRAME_SIZE: usize = 5 * 1024 * 1024;
