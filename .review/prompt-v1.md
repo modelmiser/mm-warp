@@ -57,11 +57,30 @@ Channels: mpsc(2) between stages. watch channel for FPS feedback from send → c
 
 ## KNOWN PATTERNS
 
-(None yet — first review round)
+*R1 fixes (5 MODERATE):*
+- StreamMetadata::from_bytes() validates dimensions: rejects 0 and >16384 (common/lib.rs)
+- Server PIN rejection closes QUIC connection with reason code (server.rs)
+- Server PIN read uses read_to_end(256) for complete stream read (server.rs)
+- Client PIN exchange has 10s timeout (client.rs)
+- Stale doc comment removed (client/lib.rs)
 
 ## KNOWN UNTESTED
 
-(None yet — first review round)
+*Design-level (deferred from R1):*
+- WaylandConnection::resolution() returns 1920x1080 default before first capture — encoder mismatch on non-1080p wlr-screencopy displays [ARCHITECTURAL]
+- No PIN brute-force protection — rate limiting/lockout not implemented [FEATURE]
+- Rate limiter permits 2000-event bursts at window boundaries [ACCEPTABLE-TRADEOFF]
+- H264Decoder resolution change not propagated to display — latent, server sends fixed [LATENT]
+- u32 overflow in stride/size calculations for extreme resolutions — unreachable via 16384 limit [THEORETICAL]
+- Mouse coordinate rounding error for odd capture widths [COSMETIC]
+- ext_capture frame objects not explicitly destroyed — wayland-client may handle via Drop [UNCLEAR]
+- client_ext_raw expects uncompressed 4K (33MB) but MAX_FRAME_SIZE=5MB — test binary broken [TEST-ONLY]
+
+*LOWs (accepted):*
+- pixel.rs: debug_assert only — release builds get index-out-of-bounds panic instead of clear error
+- wayland_display.rs: dispatch_pending error silently ignored (subsequent flush catches it)
+- input_inject.rs: scroll value unbounded from network (compositor handles extreme values)
+- server/lib.rs: hardcoded Argb8888 format ignores compositor's reported format (alpha discarded by encoder anyway)
 
 ## REVIEW PROTOCOL
 
