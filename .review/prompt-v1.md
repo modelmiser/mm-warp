@@ -64,6 +64,10 @@ Channels: mpsc(2) between stages. watch channel for FPS feedback from send → c
 - Client PIN exchange has 10s timeout (client.rs)
 - Stale doc comment removed (client/lib.rs)
 
+*R2 fixes (4 MODERATE):*
+- H264Encoder::new(), H264Decoder::new(), WaylandDisplay::new() validate dimensions (0 < dim <= 16384) — prevents u32 overflow and i32 truncation for library callers
+- QuicServer::send_frame() uses u32::try_from() instead of silent `as u32` cast
+
 ## KNOWN UNTESTED
 
 *Design-level (deferred from R1):*
@@ -71,7 +75,7 @@ Channels: mpsc(2) between stages. watch channel for FPS feedback from send → c
 - No PIN brute-force protection — rate limiting/lockout not implemented [FEATURE]
 - Rate limiter permits 2000-event bursts at window boundaries [ACCEPTABLE-TRADEOFF]
 - H264Decoder resolution change not propagated to display — latent, server sends fixed [LATENT]
-- u32 overflow in stride/size calculations for extreme resolutions — unreachable via 16384 limit [THEORETICAL]
+- u32 overflow in stride/size calculations — now guarded by constructor validation, remaining `as i32` casts in create_pool are safe within 16384 limit [FIXED-R2]
 - Mouse coordinate rounding error for odd capture widths [COSMETIC]
 - ext_capture frame objects not explicitly destroyed — wayland-client may handle via Drop [UNCLEAR]
 - client_ext_raw expects uncompressed 4K (33MB) but MAX_FRAME_SIZE=5MB — test binary broken [TEST-ONLY]
