@@ -1,5 +1,9 @@
 // ext-image-copy-capture-v1 implementation for COSMIC and newer compositors
 // Based on wl-screenrec: https://github.com/russelltg/wl-screenrec
+//
+// Abgr8888 shm format is identity-mapped to RGBA bytes on little-endian only.
+#[cfg(not(target_endian = "little"))]
+compile_error!("mm-warp assumes little-endian byte order for Wayland pixel formats");
 
 use anyhow::{Context, Result};
 use std::os::fd::AsFd;
@@ -109,11 +113,13 @@ impl ExtCapture {
 
         // Create shared memory buffer ONCE
         let stride = width * 4;
-        let size = (stride * height) as usize;
+        let size = (stride as usize) * (height as usize);
 
         let (fd, mmap) = mm_warp_common::buffer::create_memfd_mmap("ext_cap", size)?;
 
-        let pool = shm.create_pool(fd.as_fd(), size as i32, &qh, ());
+        let pool_size = i32::try_from(size)
+            .context("shm pool size exceeds i32")?;
+        let pool = shm.create_pool(fd.as_fd(), pool_size, &qh, ());
         let buffer = pool.create_buffer(
             0,
             width as i32,
@@ -191,7 +197,7 @@ impl ExtCapture {
         //
         // See: wayland.xml wl_shm.format enum, drm_fourcc.h naming convention.
         // Verified by: cargo run --bin test_pixel_format
-        let size = (self.width * self.height * 4) as usize;
+        let size = (self.width as usize) * (self.height as usize) * 4;
         let rgba_buffer = self.mmap.as_ref()[..size].to_vec();
 
         Ok(rgba_buffer)

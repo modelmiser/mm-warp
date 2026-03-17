@@ -104,7 +104,7 @@ fn run_realtime(codec: ffmpeg_next::Codec) -> Result<()> {
     let mut enc = enc.open_with(opts)?;
 
     for i in 0..10i64 {
-        let frame = make_frame(320, 240, (i * 25 + 50) as u8, i);
+        let frame = make_frame(320, 240, (i * 25 + 50).min(255) as u8, i);
         enc.send_frame(&frame)?;
         let (count, bytes) = receive_all(&mut enc);
         println!("Frame {:2}: {}", i + 1,

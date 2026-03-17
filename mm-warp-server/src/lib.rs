@@ -472,12 +472,14 @@ impl WaylandConnection {
         let (_format, width, height, stride) = state.buffer_info
             .context("No buffer info received from compositor")?;
 
-        let size = (stride * height) as usize;
+        let size = (stride as usize) * (height as usize);
         tracing::debug!("Creating shm buffer from compositor info: {}x{}, stride={}, size={}", width, height, stride, size);
 
         let (fd, mmap) = mm_warp_common::buffer::create_memfd_mmap("wl_shm", size)?;
 
-        let pool = shm.create_pool(fd.as_fd(), size as i32, &qh, ());
+        let pool_size = i32::try_from(size)
+            .context("shm pool size exceeds i32")?;
+        let pool = shm.create_pool(fd.as_fd(), pool_size, &qh, ());
         let buffer = pool.create_buffer(
             0,
             width as i32,
