@@ -68,6 +68,11 @@ Channels: mpsc(2) between stages. watch channel for FPS feedback from send → c
 - H264Encoder::new(), H264Decoder::new(), WaylandDisplay::new() validate dimensions (0 < dim <= 16384) — prevents u32 overflow and i32 truncation for library callers
 - QuicServer::send_frame() uses u32::try_from() instead of silent `as u32` cast
 
+*R3 fixes (3 MODERATE):*
+- InputInjector tracks pressed keys, releases all on Drop — prevents stuck modifiers on client reconnect
+- QuicClient::new(server_addr) binds matching address family — IPv6 now works
+- H264Decoder::decode() validates dimensions after mid-stream resolution change — prevents u32 overflow
+
 ## KNOWN UNTESTED
 
 *Design-level (deferred from R1):*
