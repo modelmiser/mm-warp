@@ -24,8 +24,14 @@ pub struct QuicClient {
 }
 
 impl QuicClient {
-    pub fn new() -> Result<Self> {
-        let endpoint = Endpoint::client("0.0.0.0:0".parse().unwrap())
+    pub fn new(server_addr: SocketAddr) -> Result<Self> {
+        // Bind to matching address family so IPv6 server connections work
+        let bind_addr: SocketAddr = if server_addr.is_ipv4() {
+            "0.0.0.0:0".parse().unwrap()
+        } else {
+            "[::]:0".parse().unwrap()
+        };
+        let endpoint = Endpoint::client(bind_addr)
             .map_err(|e| anyhow::anyhow!("Failed to create client endpoint: {}", e))?;
         Ok(Self { endpoint })
     }
@@ -149,6 +155,9 @@ impl H264Decoder {
                 let dw = decoded.width();
                 let dh = decoded.height();
                 if dw != self.width || dh != self.height {
+                    if dw == 0 || dh == 0 || dw > 16384 || dh > 16384 {
+                        anyhow::bail!("Decoded frame has invalid dimensions {}x{}", dw, dh);
+                    }
                     tracing::warn!("Decoded frame {}x{} differs from expected {}x{}, reinitializing scaler",
                         dw, dh, self.width, self.height);
                     self.width = dw;
@@ -386,7 +395,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_client_creation() {
-        let result = QuicClient::new();
+        let result = QuicClient::new("127.0.0.1:4433".parse().unwrap());
         assert!(result.is_ok());
     }
 

@@ -6,6 +6,9 @@ use evdev::{uinput::VirtualDeviceBuilder, AbsInfo, AbsoluteAxisType, AttributeSe
 pub struct InputInjector {
     keyboard: evdev::uinput::VirtualDevice,
     mouse: evdev::uinput::VirtualDevice,
+    /// Track currently pressed keys so we can release them on drop.
+    /// Prevents stuck modifiers when the input task is aborted on client reconnect.
+    pressed_keys: Vec<u16>,
 }
 
 impl InputInjector {
@@ -83,7 +86,7 @@ impl InputInjector {
             .build()
             .context("Failed to build virtual mouse")?;
 
-        Ok(Self { keyboard, mouse })
+        Ok(Self { keyboard, mouse, pressed_keys: Vec::new() })
     }
 
     /// Dispatch any InputEvent to the appropriate virtual device.
@@ -108,8 +111,17 @@ impl InputInjector {
             tracing::debug!("Blocked non-keyboard key code {} from remote client", key);
             return Ok(());
         }
-        let key_obj = Key::new(key as u16);
+        let key_u16 = key as u16;
+        let key_obj = Key::new(key_u16);
         let value = if pressed { 1 } else { 0 };
+        // Track pressed keys for cleanup on drop
+        if pressed {
+            if !self.pressed_keys.contains(&key_u16) {
+                self.pressed_keys.push(key_u16);
+            }
+        } else {
+            self.pressed_keys.retain(|&k| k != key_u16);
+        }
         self.keyboard.emit(&[
             EvInputEvent::new(EventType::KEY, key_obj.code(), value),
             EvInputEvent::new(EventType::SYNCHRONIZATION, 0, 0),
@@ -181,6 +193,19 @@ impl InputInjector {
             EvInputEvent::new(EventType::SYNCHRONIZATION, 0, 0),
         ])?;
         Ok(())
+    }
+}
+
+impl Drop for InputInjector {
+    fn drop(&mut self) {
+        // Release all held keys to prevent stuck modifiers on client disconnect
+        let keys = std::mem::take(&mut self.pressed_keys);
+        for key_code in keys {
+            let _ = self.keyboard.emit(&[
+                EvInputEvent::new(EventType::KEY, Key::new(key_code).code(), 0),
+                EvInputEvent::new(EventType::SYNCHRONIZATION, 0, 0),
+            ]);
+        }
     }
 }
 

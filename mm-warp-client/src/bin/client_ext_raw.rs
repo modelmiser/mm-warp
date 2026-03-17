@@ -15,7 +15,7 @@ async fn main() -> Result<()> {
     let server_addr: std::net::SocketAddr = "127.0.0.1:4433".parse()?;
     println!("Connecting to {}...", server_addr);
 
-    let client = QuicClient::new()?;
+    let client = QuicClient::new(server_addr)?;
     let connection = client.connect(server_addr, true).await?;
     println!("✅ Connected via QUIC\n");
 

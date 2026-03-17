@@ -25,10 +25,9 @@ async fn main() -> Result<()> {
     tracing_subscriber::fmt::init();
     println!("=== mm-warp Client (Wayland Display) ===\n");
 
-    let client = QuicClient::new()?;
-
-    let server_addr = args.server.parse()
+    let server_addr: std::net::SocketAddr = args.server.parse()
         .map_err(|e| anyhow::anyhow!("Invalid server address '{}': {}", args.server, e))?;
+    let client = QuicClient::new(server_addr)?;
     println!("Connecting to {}...", server_addr);
 
     // Reconnect loop — wraps the entire session

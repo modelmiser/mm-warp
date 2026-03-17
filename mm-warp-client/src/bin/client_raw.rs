@@ -7,12 +7,13 @@ async fn main() -> Result<()> {
 
     // Create client
     println!("Creating QUIC client...");
-    let client = QuicClient::new()?;
+    let server_addr: std::net::SocketAddr = "127.0.0.1:4433".parse().unwrap();
+    let client = QuicClient::new(server_addr)?;
     println!("✅ Client ready\n");
 
     // Connect to server
-    println!("Connecting to server at 127.0.0.1:4433...");
-    let connection = client.connect("127.0.0.1:4433".parse().unwrap(), true).await?;
+    println!("Connecting to server at {}...", server_addr);
+    let connection = client.connect(server_addr, true).await?;
     println!("✅ Connected\n");
 
     // Receive raw frames
