@@ -112,6 +112,9 @@ pub struct H264Decoder {
 
 impl H264Decoder {
     pub fn new(width: u32, height: u32) -> Result<Self> {
+        if width == 0 || height == 0 || width > 16384 || height > 16384 {
+            anyhow::bail!("Invalid decoder dimensions {}x{} (max 16384)", width, height);
+        }
         ffmpeg_next::init().context("Failed to initialize ffmpeg")?;
 
         let codec = ffmpeg_next::decoder::find(ffmpeg_next::codec::Id::H264)

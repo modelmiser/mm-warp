@@ -149,6 +149,9 @@ mm_warp_common::wayland_dispatch_noop!(State;
 
 impl WaylandDisplay {
     pub fn new(width: u32, height: u32) -> Result<Self> {
+        if width == 0 || height == 0 || width > 16384 || height > 16384 {
+            anyhow::bail!("Invalid display dimensions {}x{} (max 16384)", width, height);
+        }
         let connection = Connection::connect_to_env()
             .context("Failed to connect to Wayland")?;
 
