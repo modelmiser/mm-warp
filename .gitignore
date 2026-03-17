@@ -2,6 +2,7 @@ target/
 .claude/
 .crystal/
 .crystal-stem/
+.review/
 INSIGHTS.md
 *.swp
 *.swo
