@@ -1,14 +1,17 @@
 // Wayland window for displaying received frames — double-buffered
 use anyhow::{Context, Result};
-use std::os::fd::AsFd;
-use wayland_client::{Connection, Dispatch, QueueHandle};
-use wayland_client::globals::{registry_queue_init, GlobalListContents};
-use wayland_client::protocol::{wl_compositor, wl_surface, wl_shm, wl_shm_pool, wl_buffer, wl_registry, wl_seat, wl_pointer, wl_keyboard};
-use wayland_protocols::xdg::shell::client::{xdg_wm_base, xdg_surface, xdg_toplevel};
-use wayland_protocols::wp::viewporter::client::{wp_viewporter, wp_viewport};
 use memmap2::MmapMut;
-use std::sync::{Arc, Mutex};
+use std::os::fd::AsFd;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
+use wayland_client::globals::{registry_queue_init, GlobalListContents};
+use wayland_client::protocol::{
+    wl_buffer, wl_compositor, wl_keyboard, wl_pointer, wl_registry, wl_seat, wl_shm, wl_shm_pool,
+    wl_surface,
+};
+use wayland_client::{Connection, Dispatch, QueueHandle};
+use wayland_protocols::wp::viewporter::client::{wp_viewport, wp_viewporter};
+use wayland_protocols::xdg::shell::client::{xdg_surface, xdg_toplevel, xdg_wm_base};
 
 pub struct WaylandDisplay {
     connection: Connection,
@@ -41,15 +44,34 @@ struct State {
 }
 
 impl Dispatch<wl_registry::WlRegistry, GlobalListContents> for State {
-    fn event(_: &mut Self, _: &wl_registry::WlRegistry, _: wl_registry::Event, _: &GlobalListContents, _: &Connection, _: &QueueHandle<Self>) {}
+    fn event(
+        _: &mut Self,
+        _: &wl_registry::WlRegistry,
+        _: wl_registry::Event,
+        _: &GlobalListContents,
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
+    }
 }
 
 mm_warp_common::wayland_dispatch_noop!(State; wl_seat::WlSeat);
 
 impl Dispatch<wl_pointer::WlPointer, ()> for State {
-    fn event(state: &mut Self, _: &wl_pointer::WlPointer, event: wl_pointer::Event, _: &(), _: &Connection, _: &QueueHandle<Self>) {
+    fn event(
+        state: &mut Self,
+        _: &wl_pointer::WlPointer,
+        event: wl_pointer::Event,
+        _: &(),
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
         match event {
-            wl_pointer::Event::Motion { surface_x, surface_y, .. } => {
+            wl_pointer::Event::Motion {
+                surface_x,
+                surface_y,
+                ..
+            } => {
                 let scale = state.viewport_scale as f64;
                 let mut events = state.pending_events.lock().unwrap();
                 events.push(crate::InputEvent::MouseMove {
@@ -57,7 +79,11 @@ impl Dispatch<wl_pointer::WlPointer, ()> for State {
                     y: (surface_y * scale) as i32,
                 });
             }
-            wl_pointer::Event::Button { button, state: btn_state, .. } => {
+            wl_pointer::Event::Button {
+                button,
+                state: btn_state,
+                ..
+            } => {
                 use wayland_client::WEnum;
                 let pressed = matches!(btn_state, WEnum::Value(wl_pointer::ButtonState::Pressed));
                 let mut events = state.pending_events.lock().unwrap();
@@ -70,10 +96,17 @@ impl Dispatch<wl_pointer::WlPointer, ()> for State {
                     WEnum::Value(wl_pointer::Axis::HorizontalScroll) => 1u32,
                     _ => return,
                 };
-                let steps = if value.abs() > 0.0 { (value / 15.0).round() as i32 } else { 0 };
+                let steps = if value.abs() > 0.0 {
+                    (value / 15.0).round() as i32
+                } else {
+                    0
+                };
                 if steps != 0 {
                     let mut events = state.pending_events.lock().unwrap();
-                    events.push(crate::InputEvent::MouseScroll { axis: axis_id, value: -steps });
+                    events.push(crate::InputEvent::MouseScroll {
+                        axis: axis_id,
+                        value: -steps,
+                    });
                 }
             }
             _ => {}
@@ -82,8 +115,20 @@ impl Dispatch<wl_pointer::WlPointer, ()> for State {
 }
 
 impl Dispatch<wl_keyboard::WlKeyboard, ()> for State {
-    fn event(state: &mut Self, _: &wl_keyboard::WlKeyboard, event: wl_keyboard::Event, _: &(), _: &Connection, _: &QueueHandle<Self>) {
-        if let wl_keyboard::Event::Key { key, state: key_state, .. } = event {
+    fn event(
+        state: &mut Self,
+        _: &wl_keyboard::WlKeyboard,
+        event: wl_keyboard::Event,
+        _: &(),
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
+        if let wl_keyboard::Event::Key {
+            key,
+            state: key_state,
+            ..
+        } = event
+        {
             use wayland_client::WEnum;
             let mut events = state.pending_events.lock().unwrap();
             match key_state {
@@ -126,7 +171,14 @@ impl Dispatch<wl_buffer::WlBuffer, usize> for State {
 }
 
 impl Dispatch<xdg_wm_base::XdgWmBase, ()> for State {
-    fn event(_: &mut Self, wm_base: &xdg_wm_base::XdgWmBase, event: xdg_wm_base::Event, _: &(), _: &Connection, _: &QueueHandle<Self>) {
+    fn event(
+        _: &mut Self,
+        wm_base: &xdg_wm_base::XdgWmBase,
+        event: xdg_wm_base::Event,
+        _: &(),
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
         if let xdg_wm_base::Event::Ping { serial } = event {
             wm_base.pong(serial);
         }
@@ -134,7 +186,14 @@ impl Dispatch<xdg_wm_base::XdgWmBase, ()> for State {
 }
 
 impl Dispatch<xdg_surface::XdgSurface, ()> for State {
-    fn event(_: &mut Self, xdg_surface: &xdg_surface::XdgSurface, event: xdg_surface::Event, _: &(), _: &Connection, _: &QueueHandle<Self>) {
+    fn event(
+        _: &mut Self,
+        xdg_surface: &xdg_surface::XdgSurface,
+        event: xdg_surface::Event,
+        _: &(),
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
         if let xdg_surface::Event::Configure { serial } = event {
             xdg_surface.ack_configure(serial);
         }
@@ -150,10 +209,13 @@ mm_warp_common::wayland_dispatch_noop!(State;
 impl WaylandDisplay {
     pub fn new(width: u32, height: u32) -> Result<Self> {
         if width == 0 || height == 0 || width > 16384 || height > 16384 {
-            anyhow::bail!("Invalid display dimensions {}x{} (max 16384)", width, height);
+            anyhow::bail!(
+                "Invalid display dimensions {}x{} (max 16384)",
+                width,
+                height
+            );
         }
-        let connection = Connection::connect_to_env()
-            .context("Failed to connect to Wayland")?;
+        let connection = Connection::connect_to_env().context("Failed to connect to Wayland")?;
 
         let pending_events = Arc::new(Mutex::new(Vec::new()));
         let buffer_released = [
@@ -169,15 +231,25 @@ impl WaylandDisplay {
             buffer_released: [buffer_released[0].clone(), buffer_released[1].clone()],
         };
 
-        let (globals, mut event_queue) = registry_queue_init::<State>(&connection)
-            .context("Failed to initialize registry")?;
+        let (globals, mut event_queue) =
+            registry_queue_init::<State>(&connection).context("Failed to initialize registry")?;
         let qh = event_queue.handle();
 
-        let compositor: wl_compositor::WlCompositor = globals.bind(&qh, 1..=1, ()).context("wl_compositor not available")?;
-        let shm: wl_shm::WlShm = globals.bind(&qh, 1..=1, ()).context("wl_shm not available")?;
-        let wm_base: xdg_wm_base::XdgWmBase = globals.bind(&qh, 1..=1, ()).context("xdg_wm_base not available")?;
-        let viewporter: wp_viewporter::WpViewporter = globals.bind(&qh, 1..=1, ()).context("wp_viewporter not available")?;
-        let seat: wl_seat::WlSeat = globals.bind(&qh, 1..=1, ()).context("wl_seat not available")?;
+        let compositor: wl_compositor::WlCompositor = globals
+            .bind(&qh, 1..=1, ())
+            .context("wl_compositor not available")?;
+        let shm: wl_shm::WlShm = globals
+            .bind(&qh, 1..=1, ())
+            .context("wl_shm not available")?;
+        let wm_base: xdg_wm_base::XdgWmBase = globals
+            .bind(&qh, 1..=1, ())
+            .context("xdg_wm_base not available")?;
+        let viewporter: wp_viewporter::WpViewporter = globals
+            .bind(&qh, 1..=1, ())
+            .context("wp_viewporter not available")?;
+        let seat: wl_seat::WlSeat = globals
+            .bind(&qh, 1..=1, ())
+            .context("wl_seat not available")?;
 
         let keyboard = seat.get_keyboard(&qh, ());
         let pointer = seat.get_pointer(&qh, ());
@@ -202,17 +274,34 @@ impl WaylandDisplay {
         let (fd0, mmap0) = mm_warp_common::buffer::create_memfd_mmap("display0", size)?;
         let (fd1, mmap1) = mm_warp_common::buffer::create_memfd_mmap("display1", size)?;
 
-        let pool0 = shm.create_pool(fd0.as_fd(), size as i32, &qh, ());
-        let pool1 = shm.create_pool(fd1.as_fd(), size as i32, &qh, ());
+        let pool_size = i32::try_from(size).context("shm pool size exceeds i32")?;
+        let pool0 = shm.create_pool(fd0.as_fd(), pool_size, &qh, ());
+        let pool1 = shm.create_pool(fd1.as_fd(), pool_size, &qh, ());
 
         // Abgr8888 = RGBA bytes on LE — no conversion needed
-        let buffer0 = pool0.create_buffer(0, width as i32, height as i32, stride as i32,
-            wl_shm::Format::Abgr8888, &qh, 0usize);
-        let buffer1 = pool1.create_buffer(0, width as i32, height as i32, stride as i32,
-            wl_shm::Format::Abgr8888, &qh, 1usize);
+        let buffer0 = pool0.create_buffer(
+            0,
+            width as i32,
+            height as i32,
+            stride as i32,
+            wl_shm::Format::Abgr8888,
+            &qh,
+            0usize,
+        );
+        let buffer1 = pool1.create_buffer(
+            0,
+            width as i32,
+            height as i32,
+            stride as i32,
+            wl_shm::Format::Abgr8888,
+            &qh,
+            1usize,
+        );
 
         surface.commit();
-        event_queue.roundtrip(&mut state).context("Failed to roundtrip")?;
+        event_queue
+            .roundtrip(&mut state)
+            .context("Failed to roundtrip")?;
 
         Ok(Self {
             connection,
@@ -244,7 +333,11 @@ impl WaylandDisplay {
         let size = (self.buffer_width as usize) * (self.buffer_height as usize) * 4;
 
         if rgba_data.len() != size {
-            anyhow::bail!("Frame size mismatch: expected {}, got {}", size, rgba_data.len());
+            anyhow::bail!(
+                "Frame size mismatch: expected {}, got {}",
+                size,
+                rgba_data.len()
+            );
         }
 
         // Dispatch pending Wayland events (processes wl_buffer.release from previous frame)
@@ -272,9 +365,12 @@ impl WaylandDisplay {
 
         // Attach and commit
         self.surface.attach(Some(&self.buffers[idx]), 0, 0);
-        self.surface.damage_buffer(0, 0, self.buffer_width as i32, self.buffer_height as i32);
+        self.surface
+            .damage_buffer(0, 0, self.buffer_width as i32, self.buffer_height as i32);
         self.surface.commit();
-        self.connection.flush().context("Failed to flush Wayland connection")?;
+        self.connection
+            .flush()
+            .context("Failed to flush Wayland connection")?;
 
         // Mark this buffer as in-use by the compositor
         self.buffer_released[idx].store(false, Ordering::Release);

@@ -6,25 +6,25 @@
 compile_error!("mm-warp assumes little-endian byte order for Wayland pixel formats");
 
 use anyhow::{Context, Result};
+use memmap2::MmapMut;
 use std::os::fd::AsFd;
-use wayland_client::{Connection, Dispatch, QueueHandle, Proxy};
 use wayland_client::globals::{registry_queue_init, GlobalListContents};
-use wayland_client::protocol::{wl_registry, wl_output, wl_shm, wl_buffer, wl_shm_pool};
+use wayland_client::protocol::{wl_buffer, wl_output, wl_registry, wl_shm, wl_shm_pool};
+use wayland_client::{Connection, Dispatch, Proxy, QueueHandle};
 use wayland_protocols::ext::image_capture_source::v1::client::{
     ext_image_capture_source_v1::ExtImageCaptureSourceV1,
     ext_output_image_capture_source_manager_v1::ExtOutputImageCaptureSourceManagerV1,
 };
 use wayland_protocols::ext::image_copy_capture::v1::client::{
-    ext_image_copy_capture_frame_v1::{ExtImageCopyCaptureFrameV1, Event as FrameEvent},
+    ext_image_copy_capture_frame_v1::{Event as FrameEvent, ExtImageCopyCaptureFrameV1},
     ext_image_copy_capture_manager_v1::{ExtImageCopyCaptureManagerV1, Options},
     ext_image_copy_capture_session_v1::{self, ExtImageCopyCaptureSessionV1},
 };
-use memmap2::MmapMut;
 
 /// Simplified capture using ext-image-copy-capture-v1
 /// For mm-warp we just need RGB frames in memory (no GPU encoding)
 pub struct ExtCapture {
-    _connection: Connection,        // Must stay alive for Wayland protocol
+    _connection: Connection, // Must stay alive for Wayland protocol
     event_queue: wayland_client::EventQueue<CaptureState>,
     session: ExtImageCopyCaptureSessionV1,
     _shm: wl_shm::WlShm,
@@ -97,7 +97,8 @@ impl ExtCapture {
         let mut state = CaptureState::new();
 
         while state.width.is_none() && !state.frame_failed {
-            event_queue.blocking_dispatch(&mut state)
+            event_queue
+                .blocking_dispatch(&mut state)
                 .context("Failed to dispatch events")?;
         }
 
@@ -117,8 +118,7 @@ impl ExtCapture {
 
         let (fd, mmap) = mm_warp_common::buffer::create_memfd_mmap("ext_cap", size)?;
 
-        let pool_size = i32::try_from(size)
-            .context("shm pool size exceeds i32")?;
+        let pool_size = i32::try_from(size).context("shm pool size exceeds i32")?;
         let pool = shm.create_pool(fd.as_fd(), pool_size, &qh, ());
         let buffer = pool.create_buffer(
             0,
@@ -150,10 +150,12 @@ impl ExtCapture {
             if let Ok((globals, _)) = registry_queue_init::<CaptureState>(&conn) {
                 // Check for both required managers
                 let has_source = globals.contents().with_list(|list| {
-                    list.iter().any(|g| g.interface == "ext_output_image_capture_source_manager_v1")
+                    list.iter()
+                        .any(|g| g.interface == "ext_output_image_capture_source_manager_v1")
                 });
                 let has_copy = globals.contents().with_list(|list| {
-                    list.iter().any(|g| g.interface == "ext_image_copy_capture_manager_v1")
+                    list.iter()
+                        .any(|g| g.interface == "ext_image_copy_capture_manager_v1")
                 });
                 return has_source && has_copy;
             }
@@ -200,6 +202,10 @@ impl ExtCapture {
         let size = (self.width as usize) * (self.height as usize) * 4;
         let rgba_buffer = self.mmap.as_ref()[..size].to_vec();
 
+        // Destroy the frame object to avoid leaking compositor-side resources.
+        // Without this, one frame object leaks per capture call (20-60/sec).
+        frame.destroy();
+
         Ok(rgba_buffer)
     }
 
@@ -221,7 +227,15 @@ impl crate::capture::FrameSource for ExtCapture {
 
 // Minimal dispatch implementations (required by Wayland)
 impl Dispatch<wl_registry::WlRegistry, GlobalListContents> for CaptureState {
-    fn event(_: &mut Self, _: &wl_registry::WlRegistry, _: wl_registry::Event, _: &GlobalListContents, _: &Connection, _: &QueueHandle<Self>) {}
+    fn event(
+        _: &mut Self,
+        _: &wl_registry::WlRegistry,
+        _: wl_registry::Event,
+        _: &GlobalListContents,
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
+    }
 }
 
 mm_warp_common::wayland_dispatch_noop!(CaptureState;
@@ -293,8 +307,21 @@ impl Dispatch<ExtImageCopyCaptureFrameV1, ()> for CaptureState {
 }
 
 impl Dispatch<wl_output::WlOutput, ()> for CaptureState {
-    fn event(state: &mut Self, _: &wl_output::WlOutput, event: wl_output::Event, _: &(), _: &Connection, _: &QueueHandle<Self>) {
-        if let wl_output::Event::Mode { flags, width, height, refresh } = event {
+    fn event(
+        state: &mut Self,
+        _: &wl_output::WlOutput,
+        event: wl_output::Event,
+        _: &(),
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
+        if let wl_output::Event::Mode {
+            flags,
+            width,
+            height,
+            refresh,
+        } = event
+        {
             use wayland_client::WEnum;
             let refresh_hz = ((refresh + 500) / 1000) as u32; // mHz to Hz (rounded)
 
