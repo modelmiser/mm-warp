@@ -4,7 +4,7 @@ use anyhow::Result;
 #[test]
 fn test_decoder_creation() -> Result<()> {
     // Decoder should be creatable
-    let decoder = H264Decoder::new(1920, 1080)?;
+    let _decoder = H264Decoder::new(1920, 1080)?;
     println!("✅ Decoder created successfully");
     Ok(())
 }
