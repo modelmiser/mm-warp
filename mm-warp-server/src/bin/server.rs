@@ -116,10 +116,10 @@ async fn main() -> Result<()> {
                     .map_err(|e| anyhow::anyhow!("PIN: no bidi stream from client: {}", e))?;
                 let buf = recv.read_to_end(256).await
                     .map_err(|e| anyhow::anyhow!("PIN: read failed: {}", e))?;
-                let client_pin = std::str::from_utf8(&buf).unwrap_or("");
-                // Constant-time comparison to prevent timing side-channel on PIN
+                // Compare raw bytes — no UTF-8 conversion to avoid length
+                // mismatch that would undermine constant-time comparison
                 use subtle::ConstantTimeEq;
-                let pin_ok = client_pin.as_bytes().ct_eq(pin.as_bytes()).into();
+                let pin_ok: bool = buf.ct_eq(pin.as_bytes()).into();
                 if pin_ok {
                     send.write_all(b"OK").await?;
                     send.finish()?;
