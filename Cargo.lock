@@ -683,6 +683,7 @@ dependencies = [
  "rcgen",
  "rustls",
  "sha2",
+ "subtle",
  "tokio",
  "tracing",
  "tracing-subscriber",

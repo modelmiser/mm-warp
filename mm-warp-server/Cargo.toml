@@ -42,6 +42,9 @@ clap = { version = "4", features = ["derive"] }
 # Certificate fingerprinting
 sha2 = { workspace = true }
 
+# Constant-time comparison for PIN auth
+subtle = "2"
+
 [dev-dependencies]
 mm-warp-client = { path = "../mm-warp-client" }
 
