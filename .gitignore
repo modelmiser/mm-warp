@@ -4,6 +4,10 @@ target/
 .crystal-stem/
 .review/
 INSIGHTS.md
+INSIGHTS/
+DEVLOG.md
+DEVLOG/
+TODO.md
 *.swp
 *.swo
 *~
